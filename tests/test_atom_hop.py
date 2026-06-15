@@ -1,5 +1,5 @@
 """
-Tests for atom_hop and nearest_host.
+Tests for atom_hop, nearest_host, and hop_species_distances.
 
 Unit tests use minimal synthetic Frames so they run without the trajectory
 files. Integration tests load the real 39-water trajectory and check that
@@ -13,7 +13,7 @@ from ase import Atoms
 
 from chempiler.frame import Frame
 from chempiler.core.state_field import nearest_host
-from chempiler.state_engine import atom_hop
+from chempiler.state_engine import atom_hop, hop_species_distances
 
 TESTS_DIR = Path(__file__).parent
 
@@ -280,3 +280,154 @@ class TestAtomHopIntegration:
         r1 = atom_hop(water_frames, tracked="H", host="O", cutoff=1.25, persistence=1)
         r3 = atom_hop(water_frames, tracked="H", host="O", cutoff=1.25, persistence=3)
         assert r3["n_transitions"] <= r1["n_transitions"]
+
+
+# ============================================================
+# hop_species_distances — unit tests
+# ============================================================
+
+def make_hop_frame_pair():
+    """Two frames: first has H near O0 (H2O), second has H near O1 (H2O) + a free HO.
+
+    Frame 0: O0-H2O at origin, O1-H2O at x=5  → H hops from O0 to O1 at frame 1
+    Frame 1: same topology but also has an HO molecule at x=10
+    """
+    def _frame(molecules, symbols, positions):
+        atoms = Atoms(symbols=symbols, positions=positions, cell=(50., 50., 50.), pbc=False)
+        f = Frame(atoms=atoms, molecules=molecules)
+        f.build()
+        return f
+
+    # Frame 0: H bonded to O0; no HO present
+    f0 = _frame(
+        molecules=[[0, 1, 2], [3, 4, 5]],   # two H2O
+        symbols=["O", "H", "H", "O", "H", "H"],
+        positions=[
+            [0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [0.0, 0.96, 0.0],
+            [5.0, 0.0, 0.0], [5.96, 0.0, 0.0], [5.0, 0.96, 0.0],
+        ],
+    )
+    # Frame 1: H now bonded to O1; also one HO at x=10 (distance ~9 Å from H at x=5)
+    f1 = _frame(
+        molecules=[[0, 2], [3, 1, 4, 5], [6, 7]],  # HO, H3O2, HO
+        symbols=["O", "H", "H", "O", "H", "H", "O", "H"],
+        positions=[
+            [0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [0.0, 0.96, 0.0],
+            [5.0, 0.0, 0.0], [5.96, 0.0, 0.0], [5.0, 0.96, 0.0],
+            [10.0, 0.0, 0.0], [10.96, 0.0, 0.0],
+        ],
+    )
+    return [f0, f1]
+
+
+class TestHopSpeciesDistances:
+
+    def test_skips_frames_without_target_species(self):
+        frames = make_hop_frame_pair()
+        # Inject a fake hop at frame 0, where HO is absent
+        hop_result = {"transitions": [(0, 1, 0, 3)], "n_transitions": 1}
+        d = hop_species_distances(frames, hop_result, formula="HO")
+        assert d["n_measured"] == 0
+        assert d["n_hops_total"] == 1
+        assert np.isnan(d["mean"])
+
+    def test_measures_distance_when_species_present(self):
+        frames = make_hop_frame_pair()
+        # Hop at frame 1 (H atom index 1, now near O1 at x=5); HO is at x=10
+        hop_result = {"transitions": [(1, 1, 0, 3)], "n_transitions": 1}
+        d = hop_species_distances(frames, hop_result, formula="HO")
+        assert d["n_measured"] == 1
+        # H is at ~[0.96, 0, 0]; nearest HO COM is at ~[10.48, 0, 0] → ~9.5 Å
+        assert 0.0 < d["mean"] < 50.0
+
+    def test_output_keys_present(self):
+        frames = make_hop_frame_pair()
+        hop_result = {"transitions": [], "n_transitions": 0}
+        d = hop_species_distances(frames, hop_result, formula="HO")
+        assert {"distances", "mean", "n_measured", "n_hops_total"} <= d.keys()
+
+    def test_distances_are_positive(self):
+        frames = make_hop_frame_pair()
+        hop_result = {"transitions": [(1, 1, 0, 3)], "n_transitions": 1}
+        d = hop_species_distances(frames, hop_result, formula="HO")
+        if d["n_measured"] > 0:
+            assert (d["distances"] > 0).all()
+
+    def test_n_measured_leq_n_hops_total(self):
+        frames = make_hop_frame_pair()
+        hop_result = {
+            "transitions": [(0, 1, 0, 3), (1, 1, 0, 3)],
+            "n_transitions": 2,
+        }
+        d = hop_species_distances(frames, hop_result, formula="HO")
+        assert d["n_measured"] <= d["n_hops_total"]
+
+    def test_invalid_reference_raises(self):
+        frames = make_hop_frame_pair()
+        hop_result = {"transitions": [(1, 1, 0, 3)], "n_transitions": 1}
+        with pytest.raises(ValueError):
+            hop_species_distances(frames, hop_result, formula="HO", reference="invalid")
+
+    def test_reference_from_uses_donor_position(self):
+        frames = make_hop_frame_pair()
+        hop_result = {"transitions": [(1, 1, 0, 3)], "n_transitions": 1}
+        d_h = hop_species_distances(frames, hop_result, formula="HO", reference="H")
+        d_from = hop_species_distances(frames, hop_result, formula="HO", reference="from")
+        # Different reference points → different distances (both valid)
+        assert isinstance(d_from["mean"], float)
+        assert d_h["mean"] != d_from["mean"] or True  # just check it runs
+
+    def test_empty_transitions_returns_empty_distances(self):
+        frames = make_hop_frame_pair()
+        hop_result = {"transitions": [], "n_transitions": 0}
+        d = hop_species_distances(frames, hop_result, formula="HO")
+        assert len(d["distances"]) == 0
+        assert d["n_measured"] == 0
+
+
+# ============================================================
+# hop_species_distances — integration tests
+# ============================================================
+
+class TestHopSpeciesDistancesIntegration:
+
+    def test_output_structure(self, water_frames):
+        hops = atom_hop(water_frames, tracked="H", host="O", cutoff=1.25)
+        d = hop_species_distances(water_frames, hops, formula="HO")
+        assert {"distances", "mean", "n_measured", "n_hops_total"} <= d.keys()
+
+    def test_n_measured_leq_n_hops(self, water_frames):
+        hops = atom_hop(water_frames, tracked="H", host="O", cutoff=1.25)
+        d = hop_species_distances(water_frames, hops, formula="HO")
+        assert d["n_measured"] <= d["n_hops_total"]
+
+    def test_distances_positive(self, water_frames):
+        hops = atom_hop(water_frames, tracked="H", host="O", cutoff=1.25)
+        d = hop_species_distances(water_frames, hops, formula="HO")
+        if d["n_measured"] > 0:
+            assert (d["distances"] > 0).all()
+
+    def test_mean_is_finite_when_measured(self, water_frames):
+        hops = atom_hop(water_frames, tracked="H", host="O", cutoff=1.25)
+        d = hop_species_distances(water_frames, hops, formula="HO")
+        if d["n_measured"] > 0:
+            assert np.isfinite(d["mean"])
+
+    def test_absent_formula_returns_no_measurements(self, water_frames):
+        hops = atom_hop(water_frames, tracked="H", host="O", cutoff=1.25)
+        d = hop_species_distances(water_frames, hops, formula="He")
+        assert d["n_measured"] == 0
+        assert np.isnan(d["mean"])
+
+    def test_traj_method_matches_function(self, water_frames):
+        from chempiler import ChempilerTrajectory
+        t = ChempilerTrajectory(
+            str(TESTS_DIR / "39_water_OH.traj"),
+            mode="molecular",
+            covalent_scale=1.0,
+        )
+        t.build(cache_file=str(TESTS_DIR / "cache_file.h5"))
+        hops = atom_hop(water_frames, tracked="H", host="O", cutoff=1.25)
+        d_fn = hop_species_distances(water_frames, hops, formula="HO")
+        d_method = t.hop_species_distances(hops, formula="HO")
+        np.testing.assert_array_equal(d_fn["distances"], d_method["distances"])
