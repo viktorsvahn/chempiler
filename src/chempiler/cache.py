@@ -23,7 +23,8 @@ from .frame import Frame
 CACHE_VERSION = 1
 
 
-def make_cache_key(filename, mode, covalent_scale, coordination_scale, max_frames):
+def make_cache_key(filename, mode, covalent_scale, coordination_scale,
+                   max_frames, sphere_cutoffs=None):
     """Return a SHA-256 hex digest identifying a specific build configuration.
 
     Parameters
@@ -31,10 +32,13 @@ def make_cache_key(filename, mode, covalent_scale, coordination_scale, max_frame
     filename : str
         Absolute path to the trajectory file.
     mode : str
-        Perception mode passed to build_molecules.
+        Perception mode.
     covalent_scale : float
     coordination_scale : float
     max_frames : int or None
+    sphere_cutoffs : dict or None
+        {(elem_a, elem_b): float} used in sphere mode. Tuple keys are
+        serialised as "ElemA-ElemB" strings so the payload is JSON-safe.
 
     Returns
     -------
@@ -49,6 +53,10 @@ def make_cache_key(filename, mode, covalent_scale, coordination_scale, max_frame
         "max_frames": max_frames,
         "version": CACHE_VERSION,
     }
+    if sphere_cutoffs:
+        payload["sphere_cutoffs"] = {
+            f"{a}-{b}": v for (a, b), v in sorted(sphere_cutoffs.items())
+        }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 

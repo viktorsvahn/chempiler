@@ -11,27 +11,53 @@ class ChempilerTrajectory:
     """Load an ASE-readable trajectory and expose analysis methods.
 
     Molecular topology is rebuilt from scratch for every frame using
-    distance-based perception (see perception.build_molecules), which
-    correctly handles bond breaking and formation in reactive force-field
-    simulations. Results are cached to HDF5 to avoid redundant work.
+    distance-based perception, which correctly handles bond breaking and
+    formation in reactive force-field simulations. Results are cached to HDF5
+    to avoid redundant work.
 
     Parameters
     ----------
     filename : str
         Path to an ASE-readable trajectory file (.traj, .xyz, etc.).
-    mode : {"molecular", "coordination"}
-        Perception mode: ``"molecular"`` uses covalent radii to detect bonds;
-        ``"coordination"`` uses larger radii to capture coordination shells.
+    mode : {"molecular", "coordination", "sphere"}
+        Perception mode:
+
+        ``"molecular"``
+            Covalent bond graph using ASE natural cutoffs scaled by
+            *covalent_scale*. Tracks reactive species and bond breaking.
+
+        ``"coordination"``
+            Larger cutoffs (scaled by *coordination_scale*) to capture
+            first-shell coordination environments via a bond graph.
+
+        ``"sphere"``
+            Tight covalent bonds for base molecules (skin=0, excluding
+            hydrogen bonds), then explicit distance sphere cutoffs to
+            assemble coordination complexes around centre atoms. Gives
+            clean, stable species without artefacts from H-bond compression.
+            Recommended for MSD and g(r) of solvation complexes.
+
     covalent_scale : float
-        Scale factor applied to ASE natural cutoffs in molecular mode.
+        Scale factor applied to ASE natural cutoffs in molecular/coordination
+        mode, and to the base-molecule covalent step in sphere mode.
     coordination_scale : float
         Scale factor applied to ASE natural cutoffs in coordination mode.
+    sphere_cutoffs : dict or None
+        Used only when ``mode='sphere'``. Maps centre–ligand pairs to
+        cutoff distances in Å, e.g. ``{'Be-O': 2.4}`` or
+        ``{('Be','O'): 2.4}``. If ``None``, cutoffs are auto-detected from
+        the first minimum of each pair's distance distribution sampled over
+        ~50 trajectory frames.
 
     Examples
     --------
     >>> traj = ChempilerTrajectory("run.traj")
     >>> traj.build(cache_file="run.h5")
     >>> r, g = traj.rdf(center="O", target="H")
+
+    >>> traj = ChempilerTrajectory("run.traj", mode="sphere")
+    >>> traj.build(cache_file="run_sphere.h5")
+    >>> traj.summary()   # expect clean BeH8O4 instead of many clusters
     """
 
     def __init__(
@@ -40,11 +66,13 @@ class ChempilerTrajectory:
         mode="molecular",
         covalent_scale=1.0,
         coordination_scale=1.3,
+        sphere_cutoffs=None,
     ):
         self.filename = filename
         self.mode = mode
         self.covalent_scale = covalent_scale
         self.coordination_scale = coordination_scale
+        self.sphere_cutoffs = sphere_cutoffs  # None → auto-detect at build time
         self.frames = []
 
     def build(self, max_frames=None, cache_file=None):
@@ -74,14 +102,50 @@ class ChempilerTrajectory:
         if max_frames is not None:
             traj = traj[:max_frames]
 
+        # Resolve sphere cutoffs before the frame loop so auto-detection only
+        # runs once and the resolved dict is stored on self for cache keying.
+        if self.mode == "sphere":
+            from .sphere import (
+                parse_cutoffs,
+                detect_coordination_centers,
+                detect_sphere_cutoffs,
+                build_molecules_sphere,
+            )
+            resolved = parse_cutoffs(self.sphere_cutoffs)
+            if not resolved:
+                n_sample = min(50, len(traj))
+                step = max(1, len(traj) // n_sample)
+                sample = traj[::step]
+                centers = detect_coordination_centers(sample)
+                if not centers:
+                    raise RuntimeError(
+                        "mode='sphere' auto-detect found no coordination centres. "
+                        "Pass sphere_cutoffs explicitly."
+                    )
+                resolved = detect_sphere_cutoffs(sample, centers)
+                if not resolved:
+                    raise RuntimeError(
+                        "mode='sphere' auto-detect could not determine sphere "
+                        "cutoffs from the trajectory sample. "
+                        "Pass sphere_cutoffs explicitly."
+                    )
+            self.sphere_cutoffs = resolved
+
         self.frames = []
         for atoms in traj:
-            mols = build_molecules(
-                atoms,
-                mode=self.mode,
-                bond_scale=self.covalent_scale,
-                coordination_scale=self.coordination_scale,
-            )
+            if self.mode == "sphere":
+                mols = build_molecules_sphere(
+                    atoms,
+                    self.sphere_cutoffs,
+                    bond_scale=self.covalent_scale,
+                )
+            else:
+                mols = build_molecules(
+                    atoms,
+                    mode=self.mode,
+                    bond_scale=self.covalent_scale,
+                    coordination_scale=self.coordination_scale,
+                )
             frame = Frame(atoms=atoms, molecules=mols)
             frame.build()
             self.frames.append(frame)
@@ -95,6 +159,7 @@ class ChempilerTrajectory:
                 self.covalent_scale,
                 self.coordination_scale,
                 max_frames,
+                self.sphere_cutoffs,
             )
             save_cache(
                 cache_file,
