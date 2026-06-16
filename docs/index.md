@@ -20,6 +20,8 @@ lags, msd, n = traj.msd("H2O")
 
 ## Tutorials
 
+### Conventional analyses
+
 | # | Topic |
 |---|---|
 | [01](tutorials/01_getting_started.md) | Loading trajectories and HDF5 caching |
@@ -28,6 +30,17 @@ lags, msd, n = traj.msd("H2O")
 | [04](tutorials/04_msd.md) | Mean squared displacement and diffusion |
 | [05](tutorials/05_segmentation.md) | Trajectory segmentation and segment extraction |
 | [06](tutorials/06_statistics.md) | Block averaging for statistical error estimates |
+
+### Reactive-MD specific analyses
+
+| # | Topic |
+|---|---|
+| [07](tutorials/07_kinetics.md) | Reaction kinetics — event rates and lifetime distributions |
+| [08](tutorials/08_hbond.md) | Hydrogen bond count and autocorrelation |
+| [09](tutorials/09_adf.md) | Angular distribution function |
+| [10](tutorials/10_tetrahedral.md) | Tetrahedral order parameter |
+| [11](tutorials/11_vanhove.md) | Van Hove self-correlation function |
+| [12](tutorials/12_proton_hops.md) | Proton hop network |
 
 ## Package layout
 
@@ -42,7 +55,12 @@ src/chempiler/
   rdf.py          Radial distribution function
   msd.py          Mean squared displacement
   segmentation.py segment_by_molecule_count, lifetime_segments
-  state_engine.py atom_hop, ligand_exchange, coordination_dynamics
+  state_engine.py atom_hop, ligand_exchange, coordination_dynamics, hop_species_distances
+  kinetics.py     reaction_kinetics
+  hbond.py        hbond_count, hbond_acf
+  adf.py          adf
+  tetrahedral.py  tetrahedral_order
+  vanhove.py      van_hove
   core/
     tracker.py    Generic state-transition engine
     state_field.py  nearest_host
