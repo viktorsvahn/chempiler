@@ -35,16 +35,6 @@ The returned dict contains:
 
 ## Lifetime distribution
 
-The raw `lifetimes` array can be passed directly to a histogram:
-
-```python
-import matplotlib.pyplot as plt
-
-plt.hist(k['lifetimes'] * 1e15, bins=30)
-plt.xlabel("HO lifetime (fs)")
-plt.ylabel("Count")
-```
-
 **Interpretation:**
 - A distribution dominated by very short lifetimes (1–2 frames) indicates that most
   "events" are bond-fluctuation noise rather than stable intermediates. Tighten the

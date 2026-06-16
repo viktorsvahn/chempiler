@@ -68,16 +68,6 @@ for o_idx, count in involvement.most_common(5):
     print(f"O atom {o_idx:3d}: {count} events")
 ```
 
-Plot as a bar chart to see the full distribution:
-
-```python
-import matplotlib.pyplot as plt
-
-o_ids, counts = zip(*sorted(involvement.items()))
-plt.bar(range(len(o_ids)), counts)
-plt.xlabel("O atom index")
-plt.ylabel("Hop events")
-```
 
 ---
 
@@ -94,11 +84,6 @@ d = hop_species_distances(traj.frames, hops, formula="HO", reference="H")
 
 print(f"Measured hops: {d['n_measured']} / {d['n_hops_total']}")
 print(f"Mean H→HO distance at transfer: {d['mean']:.2f} Å")
-
-import matplotlib.pyplot as plt
-plt.hist(d['distances'], bins=20)
-plt.xlabel("Distance to HO at transfer (Å)")
-plt.ylabel("Count")
 ```
 
 `reference` can be:
@@ -119,8 +104,7 @@ frame_indices = [t for t, *_ in hops["transitions"]]
 counts, edges = np.histogram(frame_indices, bins=40)
 centres = 0.5 * (edges[:-1] + edges[1:])
 
-plt.plot(centres, counts)
-plt.xlabel("Frame"); plt.ylabel("Hops in bin")
+print(f"Mean hops/bin: {counts.mean():.1f},  max: {counts.max()}")
 ```
 
 A non-stationary rate signals composition changes in the trajectory; combine with

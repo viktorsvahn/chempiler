@@ -39,11 +39,8 @@ from chempiler.hbond import hbond_acf
 # Use a subset of frames for speed — 1000 frames is sufficient for ACF up to lag 100
 lags, C = hbond_acf(traj.frames[:1000], max_lag=100)
 
-import matplotlib.pyplot as plt
-plt.plot(lags, C)
-plt.xlabel("Lag (frames)")
-plt.ylabel("C(τ)")
-plt.title("H-bond ACF")
+print(f"C(τ=1):   {C[0]:.3f}")
+print(f"C(τ=100): {C[-1]:.3f}")
 ```
 
 **Interpretation:**

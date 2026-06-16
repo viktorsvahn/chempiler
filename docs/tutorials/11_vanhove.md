@@ -18,13 +18,8 @@ from chempiler.vanhove import van_hove
 
 r, G = van_hove(traj.frames, "H2O", lags=[1, 10, 50, 200])
 
-import matplotlib.pyplot as plt
-for i, lag in enumerate([1, 10, 50, 200]):
-    plt.plot(r, G[i], label=f"τ = {lag} frames")
-
-plt.xlabel("r (Å)")
-plt.ylabel("G_s(r, τ)")
-plt.legend()
+# G.shape == (4, len(r)); each row is G_s at one lag, normalised so ∫ G_s 4π r² dr ≈ 1
+print(f"r range: {r[0]:.2f}–{r[-1]:.2f} Å  ({len(r)} bins)")
 ```
 
 Returns:
@@ -86,9 +81,9 @@ r_G = r * 1e-10  # convert Å to m
 G_gauss = np.exp(-r_G**2 / (4 * D * tau)) / (4 * np.pi * D * tau) ** 1.5
 G_gauss_AA = G_gauss * 1e-30   # m⁻³ → Å⁻³
 
-plt.semilogy(r, G[lags.index(lag)], label="G_s (simulated)")
-plt.semilogy(r, G_gauss_AA, ls="--", label="Gaussian")
-plt.legend()
+# Compare values: close agreement indicates Gaussian (normal) diffusion
+residual = np.abs(G[lags.index(lag)] - G_gauss_AA).mean()
+print(f"Mean |G_s - Gaussian|: {residual:.3e} Å⁻³")
 ```
 
 ---

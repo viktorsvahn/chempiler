@@ -26,30 +26,6 @@ Set it explicitly to control the range:
 r, g = traj.rdf(center="O", target="H", rmax=5.0, dr=0.02)
 ```
 
-### Plotting
-
-```python
-import matplotlib.pyplot as plt
-
-r_oh, g_oh = traj.rdf(center="O", target="H", dr=0.02)
-r_oo, g_oo = traj.rdf(center="O", target="O", dr=0.05)
-
-fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-for ax, r, g, title in [
-    (axes[0], r_oh, g_oh, "O–H"),
-    (axes[1], r_oo, g_oo, "O–O"),
-]:
-    ax.plot(r, g, lw=1.2)
-    ax.axhline(1.0, color="0.5", lw=0.8, ls="--", label="bulk limit")
-    ax.set_xlabel("r (Å)")
-    ax.set_ylabel("g(r)")
-    ax.set_title(title)
-    ax.legend()
-
-plt.tight_layout()
-```
-
 **Interpretation — O–H:**
 - Sharp peak ~1 Å: covalent O–H bonds
 - Broader peak ~1.8 Å: hydrogen-bond donated H atoms
@@ -96,20 +72,6 @@ $$n(r) = \rho_\mathrm{target} \int_0^r g(r')\, 4\pi r'^2\, \mathrm{d}r'$$
 
 ```python
 r, g, n = traj.rdf(center="O", target="H", dr=0.02, integrate=True)
-
-import matplotlib.pyplot as plt
-
-fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-axes[0].plot(r, g, lw=1.2)
-axes[0].axhline(1.0, color="0.5", lw=0.8, ls="--")
-axes[0].set_xlabel("r (Å)"); axes[0].set_ylabel("g(r)")
-
-axes[1].plot(r, n, lw=1.2)
-axes[1].axhline(2.0, color="0.5", lw=0.8, ls="--", label="expected (H₂O)")
-axes[1].set_xlabel("r (Å)"); axes[1].set_ylabel("n(r)")
-axes[1].legend()
-
-plt.tight_layout()
 ```
 
 Reading off the coordination number:

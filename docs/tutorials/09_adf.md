@@ -14,10 +14,8 @@ from chempiler.adf import adf
 # H-O-H angles in H₂O molecules
 angles, density = adf(traj.frames, center="O", neighbors="H", formula="H2O")
 
-import matplotlib.pyplot as plt
-plt.plot(angles, density)
-plt.xlabel("H-O-H angle (°)")
-plt.ylabel("P(θ)")
+peak = angles[density.argmax()]
+print(f"Peak H-O-H angle: {peak:.1f}°")
 ```
 
 Returns:
@@ -48,11 +46,6 @@ For wider angles (e.g. O-O-O in an ice-like structure) extend the range toward 9
 
 ## Reading the peak position
 
-```python
-peak = angles[density.argmax()]
-print(f"Peak H-O-H angle: {peak:.1f}°")
-```
-
 **Interpretation:**
 - Gas-phase water: 104.5°
 - Liquid water (experiment): peak near 105°, broader than gas phase
@@ -73,9 +66,8 @@ isolate its geometry:
 a_w, d_w = adf(traj.frames, "O", "H", formula="H2O")
 a_h, d_h = adf(traj.frames, "O", "H", formula="HO")
 
-plt.plot(a_w, d_w, label="H₂O")
-plt.plot(a_h, d_h, label="HO", ls="--")
-plt.legend()
+print(f"H₂O peak: {a_w[d_w.argmax()]:.1f}°")
+print(f"HO  peak: {a_h[d_h.argmax()]:.1f}°" if len(d_h) else "HO: no angles")
 ```
 
 ---

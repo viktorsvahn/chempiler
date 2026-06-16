@@ -21,17 +21,6 @@ Returns:
 - `msd_vals` — MSD in Å² at each lag
 - `n_samples` — number of displacement samples at each lag (larger = more reliable)
 
-```python
-import matplotlib.pyplot as plt
-
-plt.figure(figsize=(7, 4))
-plt.plot(lags, msd_vals, lw=1.2)
-plt.xlabel("Lag (frames)")
-plt.ylabel("MSD (Å²)")
-plt.title("H₂O mean squared displacement")
-plt.tight_layout()
-```
-
 **Interpretation:** The MSD should be linear at long lags (diffusive regime). A flat region at
 short lags is the ballistic-to-diffusive crossover. Significant noise at large lags indicates
 too few independent samples — reduce `max_lag` or use a longer trajectory.
@@ -62,17 +51,6 @@ m_fit = msd_vals[mask] * 1e-20   # Å² → m²
 coeffs = np.polyfit(t_fit, m_fit, 1)
 D = coeffs[0] / 6
 print(f"D(H₂O) = {D:.3e} m²/s")
-
-# Plot with fit
-fig, ax = plt.subplots(figsize=(7, 4))
-ax.plot(lags * dt * 1e12, msd_vals, lw=1.2, label="MSD")
-ax.plot(lags[mask] * dt * 1e12,
-        (6 * D * t_fit + coeffs[1]) * 1e20,
-        ls="--", lw=1.5, color="tomato", label=f"fit: D = {D:.2e} m²/s")
-ax.set_xlabel("Lag (ps)")
-ax.set_ylabel("MSD (Å²)")
-ax.legend()
-plt.tight_layout()
 ```
 
 The experimental self-diffusion coefficient of liquid water at 300 K is ~2.3×10⁻⁹ m²/s.
@@ -99,18 +77,6 @@ for w in caught:
 If all lifetime segments are shorter than `correlation_time × buffer` (default buffer = 5),
 a `UserWarning` is raised. This is informational — MSD is still computed over whatever
 data is available, but the result reflects cage motion rather than bulk diffusion.
-
-```python
-fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-axes[0].plot(lags, msd_vals, lw=1.2, label="H₂O")
-axes[0].set_xlabel("Lag (frames)"); axes[0].set_ylabel("MSD (Å²)")
-axes[0].set_title("H₂O — diffusive at long lags")
-
-axes[1].plot(lags_ho, msd_ho, lw=1.2, color="tomato", label="HO")
-axes[1].set_xlabel("Lag (frames)"); axes[1].set_ylabel("MSD (Å²)")
-axes[1].set_title("HO — cage dynamics only (short lifetime)")
-```
 
 ---
 
@@ -139,11 +105,8 @@ least one complete origin-to-lag window per molecule:
 # Set explicitly for more control
 lags, msd, n = traj.msd("H2O", max_lag=200)
 
-# Check that n_samples stays large throughout the lag range
-plt.plot(lags, n_samples)
-plt.xlabel("Lag")
-plt.ylabel("Samples")
 # n_samples should decrease smoothly toward max_lag; a sudden drop signals poor statistics
+print(f"Samples at lag 1: {n_samples[0]:.0f},  at max lag: {n_samples[-1]:.0f}")
 ```
 
 ---

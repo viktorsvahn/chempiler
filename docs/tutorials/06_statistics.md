@@ -33,8 +33,6 @@ The estimated error should rise with block size and then plateau once the block 
 exceeds the true autocorrelation time. The plateau value is the correct standard error.
 
 ```python
-import matplotlib.pyplot as plt
-
 block_sizes = np.unique(np.geomspace(5, len(mol_counts) // 3, num=25, dtype=int))
 errors = []
 
@@ -45,12 +43,8 @@ for bs in block_sizes:
     except ValueError:
         errors.append(np.nan)
 
-plt.figure(figsize=(7, 4))
-plt.semilogx(block_sizes, errors, "o-", lw=1.2, ms=4)
-plt.xlabel("Block size (frames)")
-plt.ylabel("Estimated std error")
-plt.title("Block-size convergence")
-plt.tight_layout()
+# errors rises then plateaus; the plateau value is the correct std error
+print(f"Std error at large block: {errors[-1]:.4f}")
 ```
 
 **Reading the plot:**
@@ -84,12 +78,7 @@ g_blocks = np.array(g_blocks)
 g_mean   = g_blocks.mean(axis=0)
 g_err    = g_blocks.std(axis=0, ddof=1) / np.sqrt(n_blocks)
 
-plt.figure(figsize=(8, 4))
-plt.plot(r, g_mean, lw=1.2, label="mean g(r)")
-plt.fill_between(r, g_mean - g_err, g_mean + g_err, alpha=0.3, label="±1 σ")
-plt.axhline(1.0, color="0.5", lw=0.8, ls="--")
-plt.xlabel("r (Å)"); plt.ylabel("g(r)")
-plt.legend(); plt.tight_layout()
+print(f"g(r) peak: {g_mean.max():.2f} ± {g_err[g_mean.argmax()]:.3f}")
 ```
 
 ---

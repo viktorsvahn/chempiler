@@ -39,14 +39,8 @@ For long trajectories the calculation can be slow (one find_mic call per frame o
 all O-O pairs). Subsampling every N frames is usually sufficient:
 
 ```python
-import matplotlib.pyplot as plt
-
 q = tetrahedral_order(traj.frames[::5])   # every 5th frame
-
-plt.plot(np.arange(len(q)) * 5, q)
-plt.axhline(np.nanmean(q), ls="--", color="0.5", label=f"mean = {np.nanmean(q):.3f}")
-plt.xlabel("Frame"); plt.ylabel("q")
-plt.legend()
+print(f"Mean q = {np.nanmean(q):.3f} ± {np.nanstd(q):.3f}")
 ```
 
 ---
@@ -104,9 +98,9 @@ for frame in traj.frames[::10]:
         cos_mat = np.clip(v @ v.T, -1, 1)
         q_all.append(1 - (3/8) * np.sum((cos_mat[iu, ju] + 1/3)**2))
 
-import matplotlib.pyplot as plt
-plt.hist(q_all, bins=50, density=True)
-plt.xlabel("q"); plt.ylabel("P(q)")
+q_all = np.array(q_all)
+print(f"Per-atom q: mean = {q_all.mean():.3f}, std = {q_all.std():.3f}, "
+      f"min = {q_all.min():.3f}, max = {q_all.max():.3f}")
 ```
 
 ---

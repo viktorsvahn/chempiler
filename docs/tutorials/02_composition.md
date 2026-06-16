@@ -53,23 +53,17 @@ for a in frame.atoms_in_mol(mol_id):
 
 ## Molecule count over time
 
-The total number of molecules changes whenever a bond breaks or forms. Plotting it is a quick
-sanity check — a flat trace means the overall composition is stable; a step signals a reaction.
+The total number of molecules changes whenever a bond breaks or forms. A flat mean with small
+std means the overall composition is stable; large swings signal a persistent reaction.
 
 ```python
-import matplotlib.pyplot as plt
 import numpy as np
 
-mol_counts = [len(f.molecules) for f in traj.frames]
-h2o_counts = [f.formulas.count("H2O") for f in traj.frames]
+mol_counts = np.array([len(f.molecules) for f in traj.frames])
+h2o_counts = np.array([f.formulas.count("H2O") for f in traj.frames])
 
-fig, axes = plt.subplots(2, 1, sharex=True, figsize=(10, 5))
-axes[0].plot(mol_counts, lw=0.8, label="total")
-axes[0].set_ylabel("Molecules")
-axes[1].plot(h2o_counts, lw=0.8, color="forestgreen")
-axes[1].set_ylabel("H₂O count")
-axes[1].set_xlabel("Frame")
-plt.tight_layout()
+print(f"Mean molecule count: {mol_counts.mean():.1f} ± {mol_counts.std():.1f}")
+print(f"Mean H₂O count:     {h2o_counts.mean():.1f} ± {h2o_counts.std():.1f}")
 ```
 
 Fluctuations of ±1 around the baseline are expected in reactive water — they reflect
@@ -93,19 +87,6 @@ print(f"Total frames with HO: {total} / {len(traj.frames)}")
 lengths = [e - s for s, e in segs]
 print(f"Median lifetime: {np.median(lengths):.0f} frames")
 print(f"Longest lifetime: {max(lengths)} frames")
-```
-
-Visualise when the species is present:
-
-```python
-fig, ax = plt.subplots(figsize=(10, 1.5))
-for s, e in segs:
-    ax.axvspan(s, e, color="tomato", alpha=0.7, lw=0)
-ax.set_xlim(0, len(traj.frames))
-ax.set_xlabel("Frame")
-ax.set_yticks([])
-ax.set_title(f"HO lifetime segments ({len(segs)} intervals)")
-plt.tight_layout()
 ```
 
 **Interpretation:** Many very short intervals (1–3 frames) typically indicate rattling at the
