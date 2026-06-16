@@ -9,6 +9,7 @@ Functions
 atom_hop               Track mobile ions hopping between host atoms.
 ligand_exchange        Track changes in molecular formula over time.
 coordination_dynamics  Track changes in coordination environment over time.
+hop_species_distances  Distance from each hop site to nearest molecule of a given formula.
 """
 
 import numpy as np
@@ -180,3 +181,77 @@ def coordination_dynamics(frames, atom_symbol="O"):
         return tuple(sorted(frame.atoms[i].symbol for i in mol))
 
     return _track_state(frames, entities, state_fn, mode="coordination")
+
+
+def hop_species_distances(frames, hop_result, formula="HO", reference="H"):
+    """Distance from each hop site to the nearest molecule of a given formula.
+
+    For each hop event in *hop_result*, the function checks whether *formula*
+    is present in that frame. If it is, the distance from the reference position
+    to the nearest molecule of that formula is recorded. Hops where the target
+    species is absent are skipped.
+
+    Parameters
+    ----------
+    frames : list of Frame
+    hop_result : dict
+        Output of ``atom_hop``.
+    formula : str
+        Formula of the target species to measure against (e.g. ``"HO"``).
+    reference : {"H", "from", "to"}
+        Position used as the hop site:
+        ``"H"``    — hopping atom position (default);
+        ``"from"`` — donor host atom position;
+        ``"to"``   — acceptor host atom position.
+
+    Returns
+    -------
+    dict with keys:
+        distances       : numpy.ndarray — one distance per measured hop (Å)
+        mean            : float — mean distance (nan if no hops measured)
+        n_measured      : int — hops where *formula* was present
+        n_hops_total    : int — total hop events in *hop_result*
+
+    Examples
+    --------
+    >>> hops = atom_hop(frames, tracked="H", host="O", cutoff=1.25)
+    >>> d = hop_species_distances(frames, hops, formula="HO")
+    >>> print(f"Mean H→HO distance: {d['mean']:.2f} Å  (n={d['n_measured']})")
+    """
+    distances = []
+
+    for frame_idx, h_idx, from_o, to_o in hop_result["transitions"]:
+        frame = frames[frame_idx]
+        mol_ids = frame.formula_to_mols.get(formula)
+        if not mol_ids:
+            continue
+
+        if reference == "H":
+            ref_pos = frame.positions[h_idx]
+        elif reference == "from":
+            if from_o is None:
+                continue
+            ref_pos = frame.positions[from_o]
+        elif reference == "to":
+            if to_o is None:
+                continue
+            ref_pos = frame.positions[to_o]
+        else:
+            raise ValueError(f"reference must be 'H', 'from', or 'to', got {reference!r}")
+
+        target_coms = np.array([frame.coms[m] for m in mol_ids])
+        diffs = target_coms - ref_pos
+
+        if frame.atoms.get_pbc().any():
+            cell = np.asarray(frame.atoms.get_cell())
+            diffs -= np.round(diffs @ np.linalg.inv(cell)) @ cell
+
+        distances.append(float(np.linalg.norm(diffs, axis=1).min()))
+
+    distances = np.array(distances)
+    return {
+        "distances": distances,
+        "mean": float(distances.mean()) if len(distances) > 0 else float("nan"),
+        "n_measured": len(distances),
+        "n_hops_total": hop_result["n_transitions"],
+    }

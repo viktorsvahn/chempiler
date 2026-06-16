@@ -53,3 +53,39 @@ def segment_by_molecule_count(frames, block=100, threshold=0.5):
 
     segments.append((start, len(frames)))
     return segments
+
+
+def lifetime_segments(frames, formula):
+    """Return contiguous frame intervals where a molecular species is present.
+
+    Parameters
+    ----------
+    frames : list of Frame
+    formula : str
+        Molecular formula to search for (e.g. ``"H5O3"``).
+
+    Returns
+    -------
+    list of tuple of (int, int)
+        Each tuple is a half-open interval ``[start, end)`` of consecutive
+        frame indices during which at least one molecule with *formula* exists.
+
+    Examples
+    --------
+    >>> segs = lifetime_segments(traj.frames, "H5O3")
+    >>> segs
+    [(102, 108), (431, 435), (891, 897)]
+    >>> frames_in_first_seg = traj.frames[segs[0][0]:segs[0][1]]
+    """
+    segments = []
+    start = None
+    for i, frame in enumerate(frames):
+        present = formula in frame.formula_to_mols
+        if present and start is None:
+            start = i
+        elif not present and start is not None:
+            segments.append((start, i))
+            start = None
+    if start is not None:
+        segments.append((start, len(frames)))
+    return segments

@@ -121,6 +121,49 @@ class ChempilerTrajectory:
                 c.update(f.formulas)
         return dict(c)
 
+    def lifetime_segments(self, formula):
+        """Return contiguous frame intervals where *formula* is present.
+
+        Parameters
+        ----------
+        formula : str
+            Molecular formula to search for (e.g. ``"H5O3"``).
+
+        Returns
+        -------
+        list of tuple of (int, int)
+            Half-open intervals ``[start, end)`` of consecutive frames during
+            which at least one molecule with *formula* exists.
+
+        Examples
+        --------
+        >>> segs = traj.lifetime_segments("H5O3")
+        >>> traj.frames[segs[0][0]:segs[0][1]]   # frames of first lifetime
+        """
+        from .segmentation import lifetime_segments
+        return lifetime_segments(self.frames, formula)
+
+    def hop_species_distances(self, hop_result, formula="HO", reference="H"):
+        """Distance from each hop site to the nearest molecule of a given formula.
+
+        Parameters
+        ----------
+        hop_result : dict
+            Output of ``atom_hop``.
+        formula : str
+            Formula of the target species (e.g. ``"HO"``).
+        reference : {"H", "from", "to"}
+            Hop site reference: ``"H"`` (hopping atom), ``"from"`` (donor O),
+            or ``"to"`` (acceptor O).
+
+        Returns
+        -------
+        dict with keys:
+            distances, mean, n_measured, n_hops_total
+        """
+        from .state_engine import hop_species_distances
+        return hop_species_distances(self.frames, hop_result, formula=formula, reference=reference)
+
     def rdf(self, *args, **kwargs):
         """Compute the radial distribution function.
 
@@ -140,3 +183,37 @@ class ChempilerTrajectory:
                 )
         from .rdf import rdf
         return rdf(self.frames, *args, **kwargs)
+
+    def msd(self, formula, max_lag=None, correlation_time=None, buffer=5):
+        """Compute the mean squared displacement for a molecular species.
+
+        Molecules are tracked within their lifetime segments using minimum-image
+        nearest-neighbour COM matching between consecutive frames. Tracks from
+        all segments are combined with the standard windowed estimator.
+
+        Parameters
+        ----------
+        formula : str
+            Molecular formula (e.g. ``"H2O"`` or ``"HO"``). Must appear in
+            ``traj.summary()``.
+        max_lag : int, optional
+            Maximum lag in frames. Defaults to half the longest lifetime segment.
+        correlation_time : int, optional
+            Estimated autocorrelation time of the species motion in frames.
+            Segments shorter than ``correlation_time * buffer`` emit a
+            :class:`UserWarning` as they may represent spurious intermediates.
+        buffer : int
+            Safety factor applied to *correlation_time* (default 5).
+
+        Returns
+        -------
+        lags : numpy.ndarray
+            Lag times in frames (1, 2, …, max_lag).
+        msd_vals : numpy.ndarray
+            Mean squared displacement in Å² at each lag.
+        n_samples : numpy.ndarray
+            Number of displacement samples at each lag (larger = more reliable).
+        """
+        from .msd import msd
+        return msd(self.frames, formula, max_lag=max_lag,
+                   correlation_time=correlation_time, buffer=buffer)
