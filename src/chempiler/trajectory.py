@@ -7,6 +7,53 @@ from .perception import build_molecules
 from .cache import make_cache_key, save_cache, load_cache
 
 
+def _make_vacuum(frame, center_formula=None, center_instance=0):
+    """Return a copy of frame.atoms with PBC removed and all molecules made whole.
+
+    Each molecule is reassembled via the minimum-image convention so that
+    atoms split across a periodic boundary are translated to be adjacent to
+    the first atom of their molecule. The returned Atoms object has pbc=False
+    and no cell.
+
+    If *center_formula* is given and the formula is present in this frame,
+    all positions are shifted so the centroid of that molecule is at the
+    origin. Frames where the formula is absent (e.g. buffer frames outside
+    a lifetime segment) are shifted using the nearest available centroid
+    from the trajectory — callers that need strict per-frame handling should
+    pass ``center_formula=None`` for those frames.
+    """
+    import numpy as np
+    from ase import Atoms
+
+    atoms = frame.atoms
+    pos = atoms.get_positions().copy()
+    cell = np.asarray(atoms.get_cell())
+    inv_cell = np.linalg.inv(cell)
+
+    for mol in frame.molecules:
+        if len(mol) < 2:
+            continue
+        ref = pos[mol[0]]
+        for idx in mol[1:]:
+            diff = pos[idx] - ref
+            frac = diff @ inv_cell
+            frac -= np.round(frac)
+            pos[idx] = ref + frac @ cell
+
+    if center_formula is not None:
+        mol_ids = frame.formula_to_mols.get(center_formula, [])
+        if mol_ids and center_instance < len(mol_ids):
+            atom_idx = frame.molecules[mol_ids[center_instance]]
+            centroid = pos[atom_idx].mean(axis=0)
+            pos -= centroid
+
+    return Atoms(
+        symbols=atoms.get_chemical_symbols(),
+        positions=pos,
+        pbc=False,
+    )
+
+
 class ChempilerTrajectory:
     """Load an ASE-readable trajectory and expose analysis methods.
 
@@ -117,17 +164,18 @@ class ChempilerTrajectory:
                 step = max(1, len(traj) // n_sample)
                 sample = traj[::step]
                 centers = detect_coordination_centers(sample)
-                if not centers:
-                    raise RuntimeError(
-                        "mode='sphere' auto-detect found no coordination centres. "
-                        "Pass sphere_cutoffs explicitly."
-                    )
-                resolved = detect_sphere_cutoffs(sample, centers)
-                if not resolved:
-                    raise RuntimeError(
-                        "mode='sphere' auto-detect could not determine sphere "
-                        "cutoffs from the trajectory sample. "
-                        "Pass sphere_cutoffs explicitly."
+                if centers:
+                    resolved = detect_sphere_cutoffs(sample, centers)
+                    if not resolved:
+                        print(
+                            "[Chempiler] sphere mode: centre elements found "
+                            "but no sphere cutoffs detected. "
+                            "Using tight covalent bonds only."
+                        )
+                else:
+                    print(
+                        "[Chempiler] sphere mode: no coordination centres found. "
+                        "Using tight covalent bonds only (skin=0.1 Å)."
                     )
             self.sphere_cutoffs = resolved
 
@@ -282,3 +330,159 @@ class ChempilerTrajectory:
         from .msd import msd
         return msd(self.frames, formula, max_lag=max_lag,
                    correlation_time=correlation_time, buffer=buffer)
+
+    def extract_segments(self, formula, output_dir='.', vacuum=False,
+                         center=False, center_instance=0):
+        """Extract trajectory segments containing *formula* and write them as XYZ.
+
+        Each contiguous block of frames in which at least one molecule with
+        the given formula is present is written to a separate file named
+        ``{formula}_{start}_{end}.xyz``.
+
+        Parameters
+        ----------
+        formula : str
+            Molecular formula to search for (e.g. ``'HO'``, ``'BeH8O4'``).
+        output_dir : str or Path
+            Directory in which to write the XYZ files. Created if absent.
+        vacuum : bool
+            If ``True``, remove the periodic cell from each saved frame and
+            reassemble all molecules so that atoms split across a periodic
+            boundary are translated to be adjacent to the rest of their
+            molecule. The output files have no cell and can be visualised as
+            free-space clusters. If ``False`` (default), the original
+            periodic structure is preserved.
+        center : bool
+            If ``True`` (requires ``vacuum=True``), translate each frame so
+            that the centroid of the *formula* molecule sits at the origin.
+            Useful for visualising how the coordination environment evolves
+            over time.
+        center_instance : int
+            Which occurrence of *formula* to centre on when multiple are
+            present in a frame (0-indexed, default 0).
+
+        Returns
+        -------
+        list of tuple of (int, int)
+            Half-open frame intervals ``[start, end)`` of the extracted
+            segments.
+
+        Raises
+        ------
+        ValueError
+            If *formula* does not appear in any frame.
+        """
+        from pathlib import Path
+        from ase.io import write as ase_write
+        from .segmentation import lifetime_segments
+
+        segs = lifetime_segments(self.frames, formula)
+        if not segs:
+            raise ValueError(f"'{formula}' not found in any frame.")
+
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        cf = formula if (vacuum and center) else None
+
+        for start, end in segs:
+            frames_out = []
+            for fi in range(start, end):
+                frame = self.frames[fi]
+                if vacuum:
+                    a = _make_vacuum(frame, center_formula=cf,
+                                     center_instance=center_instance)
+                else:
+                    a = frame.atoms.copy()
+                frames_out.append(a)
+
+            fname = out / f'{formula}_{start}_{end}.xyz'
+            ase_write(str(fname), frames_out, format='extxyz')
+            print(f'  Written {fname}  ({end - start} frames)')
+
+        return segs
+
+    def extract_transition(self, formula, segment, buffer=10, event='birth',
+                           output_dir='.', vacuum=False, center=False,
+                           center_instance=0):
+        """Extract the reaction window around a species appearing or disappearing.
+
+        Writes a short XYZ trajectory centred on the creation (``'birth'``)
+        or destruction (``'death'``) event of a specific lifetime segment.
+        The window spans ``buffer`` frames on each side of the transition
+        point, clipped to the trajectory bounds.
+
+        Parameters
+        ----------
+        formula : str
+            Molecular formula (e.g. ``'HO'``, ``'BeH8O4'``).
+        segment : int
+            0-based index into the list returned by ``lifetime_segments``.
+        buffer : int
+            Number of frames to include on each side of the event (default 10).
+        event : {'birth', 'death', 'both'}
+            Which transition to extract. ``'birth'`` captures the appearance
+            of the species; ``'death'`` its disappearance; ``'both'`` writes
+            a separate file for each.
+        output_dir : str or Path
+            Directory in which to write the XYZ files. Created if absent.
+        vacuum : bool
+            Remove PBC and reassemble molecules (same as in
+            :meth:`extract_segments`).
+        center : bool
+            Translate each frame so the *formula* molecule centroid sits at
+            the origin (requires ``vacuum=True``). Frames in the buffer region
+            where the species is absent are left uncentred.
+        center_instance : int
+            Which occurrence of *formula* to centre on (0-indexed, default 0).
+
+        Returns
+        -------
+        tuple of (int, int)
+            The ``(start, end)`` of the requested segment.
+
+        Raises
+        ------
+        ValueError
+            If *formula* is not found in any frame.
+        IndexError
+            If *segment* is out of range.
+        """
+        from pathlib import Path
+        from ase.io import write as ase_write
+        from .segmentation import lifetime_segments
+
+        segs = lifetime_segments(self.frames, formula)
+        if not segs:
+            raise ValueError(f"'{formula}' not found in any frame.")
+        if not (-len(segs) <= segment < len(segs)):
+            raise IndexError(
+                f"Segment index {segment} out of range (0–{len(segs) - 1})."
+            )
+
+        n = len(self.frames)
+        start, end = segs[segment]
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        cf = formula if (vacuum and center) else None
+
+        def _write_window(win_start, win_end, label):
+            frames_out = []
+            for fi in range(win_start, win_end):
+                frame = self.frames[fi]
+                if vacuum:
+                    a = _make_vacuum(frame, center_formula=cf,
+                                     center_instance=center_instance)
+                else:
+                    a = frame.atoms.copy()
+                frames_out.append(a)
+            fname = out / f'{formula}_seg{segment}_{label}.xyz'
+            ase_write(str(fname), frames_out, format='extxyz')
+            print(f'  Written {fname}  ({win_end - win_start} frames, '
+                  f'event at frame {start if label == "birth" else end})')
+
+        if event in ('birth', 'both'):
+            _write_window(max(0, start - buffer), min(n, start + buffer), 'birth')
+        if event in ('death', 'both'):
+            _write_window(max(0, end - buffer), min(n, end + buffer), 'death')
+
+        return segs[segment]

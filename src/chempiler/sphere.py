@@ -191,8 +191,9 @@ def build_molecules_sphere(atoms, sphere_cutoffs, bond_scale=1.0):
         else:
             cov[i] *= bond_scale
 
-    # skin=0 so hydrogen-bond distances are never mistaken for covalent bonds
-    nl = NeighborList(cov, skin=0.0, self_interaction=False, bothways=True)
+    # skin=0.1 Å: enough margin to capture slightly-stretched covalent bonds
+    # (~0.97 Å O-H → cutoff 1.07 Å) while keeping H-bonds (>1.5 Å) excluded.
+    nl = NeighborList(cov, skin=0.1, self_interaction=False, bothways=True)
     nl.update(atoms)
 
     uf = UnionFind(n)
