@@ -118,7 +118,7 @@ def load_cache(path):
     frames = []
 
     with h5py.File(path, "r") as h5:
-        for k in h5["frames"].keys():
+        for k in sorted(h5["frames"].keys(), key=int):
             g = h5["frames"][k]
             f = Frame()
 
@@ -138,7 +138,14 @@ def load_cache(path):
             blob = g["atoms"][()].tobytes()
             f.atoms = read(io.BytesIO(blob), format="traj")
 
-            f.build()
+            # formulas and coms are already loaded; restore the remaining
+            # derived fields without rerunning the per-molecule loop.
+            f.symbols = f.atoms.get_chemical_symbols()
+            f.positions = f.atoms.get_positions()
+            for mi, formula in enumerate(f.formulas):
+                f.formula_to_mols.setdefault(formula, []).append(mi)
+            f._build_atom_to_mol()
+
             frames.append(f)
 
     return frames
