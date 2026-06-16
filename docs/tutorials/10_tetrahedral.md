@@ -1,11 +1,11 @@
 # 10 — Tetrahedral order parameter
 
-The tetrahedral order parameter q quantifies how close the four nearest oxygen
+The tetrahedral order parameter $q$ quantifies how close the four nearest oxygen
 neighbours of each oxygen are to a perfect tetrahedral arrangement:
 
-q = 1 − (3/8) Σ_{j<k} (cos θ_jik + 1/3)²
+$$q = 1 - \frac{3}{8} \sum_{j<k} \left(\cos\theta_{jik} + \frac{1}{3}\right)^2$$
 
-where θ_jik is the angle at atom i between neighbours j and k, and the sum runs over
+where $\theta_{jik}$ is the angle at atom $i$ between neighbours $j$ and $k$, and the sum runs over
 all six pairs among the four nearest neighbours.
 
 | Structure | q |

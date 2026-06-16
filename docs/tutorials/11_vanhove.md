@@ -1,12 +1,12 @@
 # 11 — Van Hove self-correlation
 
-The self part of the Van Hove correlation function G_s(r, τ) is the probability
-density of finding a molecule at distance r from its own position τ frames earlier:
+The self part of the Van Hove correlation function $G_s(r, \tau)$ is the probability
+density of finding a molecule at distance $r$ from its own position $\tau$ frames earlier:
 
-G_s(r, τ) = (1/N) Σ_i ⟨δ(r − |r_i(t+τ) − r_i(t)|)⟩
+$$G_s(r, \tau) = \frac{1}{N} \sum_i \left\langle \delta\!\left(r - |\mathbf{r}_i(t+\tau) - \mathbf{r}_i(t)|\right) \right\rangle$$
 
-It gives a richer picture than the MSD alone: the MSD is the second moment of G_s,
-but G_s also reveals the shape of the displacement distribution, showing directly
+It gives a richer picture than the MSD alone: the MSD is the second moment of $G_s$,
+but $G_s$ also reveals the shape of the displacement distribution, showing directly
 whether diffusion is Gaussian (normal) or has structure (caging, heterogeneity).
 
 ---
@@ -26,7 +26,7 @@ Returns:
 
 - `r` — bin centres in Å
 - `G` — array of shape `(len(lags), len(r))`; each row is G_s at one lag, normalised
-  so that ∫ G_s(r, τ) 4π r² dr ≈ 1.
+  so that $\int G_s(r, \tau)\, 4\pi r^2\, \mathrm{d}r \approx 1$.
 
 ---
 
@@ -44,22 +44,22 @@ r, G = van_hove(
 
 **Choosing `lags`:** pick a range that spans from sub-collision (a few frames) to
 well into the diffusive regime (hundreds of frames). The MSD plot is a good guide:
-the linear region of MSD corresponds to the lag range where G_s is roughly Gaussian.
+the linear region of MSD corresponds to the lag range where $G_s$ is roughly Gaussian.
 
 **Choosing `rmax`:** must be larger than the typical displacement at the longest lag.
-A rough estimate: r_max ≈ √(6 D × τ_max) + 2 Å.
+A rough estimate: $r_\mathrm{max} \approx \sqrt{6D\tau_\mathrm{max}} + 2$ Å.
 
 ---
 
 ## Interpreting the curves
 
-- **Short lags (1–5 frames):** narrow peak near r = 0. The molecule has barely moved.
+- **Short lags (1–5 frames):** narrow peak near $r = 0$. The molecule has barely moved.
 - **Intermediate lags:** the peak shifts outward and broadens. If a shoulder or
   secondary peak appears, it indicates caging — the molecule is trapped in the first
   coordination shell before escaping.
-- **Long lags (diffusive regime):** G_s approaches a Gaussian:
+- **Long lags (diffusive regime):** $G_s$ approaches a Gaussian:
 
-  G_s(r, τ) ≈ (4π D τ)^{-3/2} exp(−r² / 4Dτ)
+  $$G_s(r, \tau) \approx (4\pi D\tau)^{-3/2} \exp\!\left(-\frac{r^2}{4D\tau}\right)$$
 
   Deviation from Gaussian at long lags signals heterogeneous dynamics.
 
@@ -67,7 +67,7 @@ A rough estimate: r_max ≈ √(6 D × τ_max) + 2 Å.
 
 ## Checking for Gaussian diffusion
 
-Plot G_s on a log scale and overlay the expected Gaussian to check:
+Compute the Gaussian prediction and compare numerically:
 
 ```python
 import numpy as np
@@ -92,7 +92,7 @@ print(f"Mean |G_s - Gaussian|: {residual:.3e} Å⁻³")
 
 Molecules are tracked within their lifetime segments using the same COM-matching
 algorithm as `msd()`. When a molecule undergoes a reactive event (H₂O ↔ HO), its
-track ends and the displacement sample set is truncated. This means G_s at long lags
+track ends and the displacement sample set is truncated. This means $G_s$ at long lags
 is computed from fewer samples; check the `n_samples` output from `msd()` to see
 where statistics become sparse.
 
@@ -100,6 +100,6 @@ where statistics become sparse.
 
 ## Next steps
 
-- [04 — MSD](04_msd.md): the second moment of G_s gives the diffusion coefficient
+- [04 — MSD](04_msd.md): the second moment of $G_s$ gives the diffusion coefficient
 - [07 — Kinetics](07_kinetics.md): reactive events that truncate molecule tracks
-- [06 — Statistics](06_statistics.md): block-average G_s over segments for error bands
+- [06 — Statistics](06_statistics.md): block-average $G_s$ over segments for error bands

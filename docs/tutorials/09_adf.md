@@ -21,7 +21,7 @@ print(f"Peak H-O-H angle: {peak:.1f}°")
 Returns:
 
 - `angles` — bin centres in degrees
-- `density` — probability density normalised so ∫ P(θ) dθ = 1 over `angle_range`
+- `density` — probability density normalised so $\int P(\theta)\,\mathrm{d}\theta = 1$ over `angle_range`
 
 ---
 

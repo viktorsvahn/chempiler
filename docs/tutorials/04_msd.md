@@ -1,10 +1,10 @@
 # 04 — Mean squared displacement
 
-The MSD measures how far molecules travel on average as a function of time lag τ:
+The MSD measures how far molecules travel on average as a function of time lag $\tau$:
 
 $$\mathrm{MSD}(\tau) = \langle |\mathbf{r}(t + \tau) - \mathbf{r}(t)|^2 \rangle$$
 
-The slope at long lags gives the self-diffusion coefficient D:
+The slope at long lags gives the self-diffusion coefficient $D$:
 
 $$D = \frac{\mathrm{MSD}(\tau)}{6\tau}$$
 
@@ -88,7 +88,7 @@ displacement samples at every lag from every available track:
 
 $$\mathrm{MSD}(\tau) = \frac{1}{N(\tau)} \sum_{t} |\mathbf{r}(t+\tau) - \mathbf{r}(t)|^2$$
 
-where the sum runs over all valid (molecule, origin time) pairs for that lag.
+where the sum runs over all valid (molecule, origin-time) pairs for that lag.
 
 When a molecule changes formula (reactive event), its track ends and any newly formed
 molecule of the same formula starts a fresh track. This correctly handles reactive
