@@ -99,33 +99,64 @@ traj.extract_segments(
 
 ---
 
-## Extracting reaction windows
+## Accessing segment frames directly
 
-`traj.extract_transition` writes a short trajectory centred on the moment a species
-appears (`"birth"`) or disappears (`"death"`):
+`traj.segment_frames(formula, segment)` returns the raw frames for one lifetime
+segment without writing any files:
 
 ```python
-# Reaction window around the first HO appearance: ±10 frames
-traj.extract_transition(
-    "HO",
-    segment=0,         # 0-based index into lifetime_segments list
-    buffer=10,         # frames on each side
-    event="birth",
-    output_dir="output/transitions",
-    vacuum=True,
-    center=True,
-)
-# Written output/transitions/HO_seg0_birth.xyz  (20 frames, event at frame 102)
+frames = traj.segment_frames("HO", 0)   # first HO lifetime interval
+frames = traj.segment_frames("HO", -1)  # last segment
 ```
 
-Use `event="both"` to write the appearance and disappearance windows in one call:
+The returned list can be passed directly to any analysis function:
+
+```python
+from chempiler.rdf import rdf
+
+frames = traj.segment_frames("HO", 0)
+r, g = rdf(frames, center={"HO": "O"}, target="H", dr=0.02)
+```
+
+---
+
+## Reaction windows
+
+`traj.reaction_window` returns the frames around a birth or death event together
+with the boundary frame index — without writing any files:
+
+```python
+frames, boundary = traj.reaction_window(
+    "HO",
+    segment=0,    # 0-based index into lifetime_segments list
+    buffer=10,    # frames on each side of the event
+    event="birth",
+)
+# frames: list of Frame objects [boundary-10 ... boundary+10]
+# boundary: int — frame index of the birth event
+```
+
+The frames can then be processed and written with your preferred centering strategy:
+
+```python
+from chempiler.trajectory import _recenter
+from ase.io import write as ase_write
+
+frames, boundary = traj.reaction_window("HO", 0, buffer=10, event="birth")
+recentered = _recenter(frames, center_atoms=[atom_idx])
+ase_write("HO_birth.xyz", recentered, format="extxyz")
+```
+
+`_recenter` keeps PBC intact and shifts all atoms so that `center_atoms` sit at the
+cell centre, frame by frame (each frame is independent; no cross-frame averaging).
+
+For disk-based output compatible with legacy workflows, `extract_transition` still
+writes XYZ files directly:
 
 ```python
 traj.extract_transition("HO", segment=0, buffer=15, event="both",
                          output_dir="output/transitions", vacuum=True, center=True)
 ```
-
-This is useful for identifying the local structural change that triggers each reaction.
 
 ---
 

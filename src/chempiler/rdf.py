@@ -152,3 +152,120 @@ def rdf(frames, center, target, rmax=None, dr=0.02, integrate=False, n_workers=1
         n = rho_avg * np.cumsum(g * shell)
         return r, g, n
     return r, g
+
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+_ELEM_COLOR = {
+    'H': '#c8d8f0', 'C': '#444444', 'N': '#4169e1', 'O': '#d62728',
+    'F': '#2ca02c', 'S': '#bcbd22', 'Cl': '#17becf', 'P': '#e377c2',
+}
+_ELEM_SIZE = {
+    'H': 110, 'C': 240, 'N': 240, 'O': 300, 'F': 200, 'S': 320,
+    'Cl': 320, 'P': 300,
+}
+
+
+def _parse_fspec(fspec):
+    """Split 'path/to/file.xyz@3' into ('path/to/file.xyz', 3)."""
+    if isinstance(fspec, (tuple, list)):
+        return fspec[0], int(fspec[1])
+    s = str(fspec)
+    if '@' in s:
+        path, idx = s.rsplit('@', 1)
+        return path, int(idx)
+    return s, 0
+
+
+def _draw_cluster_2d(ax, atoms, margin=0.3):
+    from ase.data import covalent_radii, atomic_numbers
+    from matplotlib.patches import Circle
+    pos = atoms.get_positions()
+    syms = atoms.get_chemical_symbols()
+    c = pos - pos.mean(axis=0)
+    _, _, Vt = np.linalg.svd(c, full_matrices=False)
+    xy = c @ Vt[:2].T  # project onto the two axes of greatest variance
+    radii = [covalent_radii[atomic_numbers[s]] for s in syms]
+    for k, sym in enumerate(syms):
+        circle = Circle(xy[k], radius=radii[k],
+                        color=_ELEM_COLOR.get(sym, '#7f7f7f'),
+                        ec='#222', lw=0.4, zorder=2)
+        ax.add_patch(circle)
+    # Limit includes atom radii so circles are never clipped.
+    half = np.abs(xy).max() + max(radii)
+    pad = half * margin
+    ax.set_xlim(-half - pad, half + pad)
+    ax.set_ylim(-half - pad, half + pad)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+
+def plot_rdf(r, g, insets=None, ax=None,
+             inset_w=0.13, inset_h=0.38, inset_y=0.56, inset_margin=0.2,
+             **line_kw):
+    """Plot g(r) and optionally add per-peak structure insets.
+
+    Parameters
+    ----------
+    r, g : array-like
+        RDF arrays as returned by :func:`rdf`.
+    insets : dict, optional
+        ``{peak_r: fspec}`` mapping.  Each value is either:
+
+        - a file path string ``"path.xyz"`` (reads frame 0)
+        - ``"path.xyz@N"`` to select frame *N* from a multi-frame file
+        - a dict ``{"file": fspec, "w": float, "h": float, "y": float}``
+          to override the inset size / position for that peak.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
+    inset_w, inset_h, inset_y : float
+        Default inset width, height, and bottom edge in axes-fraction
+        coordinates.  Per-inset dicts can override these individually.
+    inset_margin : float
+        Fractional padding added around the structure data in each inset
+        (passed to ``ax.margins``).  Increase if atoms are still clipped.
+    **line_kw
+        Passed directly to ``ax.plot`` for the g(r) line.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    import matplotlib.pyplot as plt
+    from ase.io import read as ase_read
+
+    r = np.asarray(r)
+    g = np.asarray(g)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(10, 5))
+
+    line_kw.setdefault('lw', 1.5)
+    ax.plot(r, g, **line_kw)
+    ax.set_xlabel('r (Å)')
+    ax.set_ylabel('g(r)')
+
+    if insets:
+        r_min, r_max = float(r[0]), float(r[-1])
+
+        for rp, spec in insets.items():
+            if isinstance(spec, dict):
+                fspec = spec['file']
+                w = spec.get('w', inset_w)
+                h = spec.get('h', inset_h)
+                y = spec.get('y', inset_y)
+                m = spec.get('margin', inset_margin)
+            else:
+                fspec, w, h, y, m = spec, inset_w, inset_h, inset_y, inset_margin
+
+            path, idx = _parse_fspec(fspec)
+            atoms = ase_read(path, index=idx)
+
+            xf = (float(rp) - r_min) / (r_max - r_min)
+            xf = float(np.clip(xf - w / 2, 0.01, 1.0 - w - 0.01))
+            ins = ax.inset_axes([xf, y, w, h])
+            _draw_cluster_2d(ins, atoms, margin=m)
+
+    return ax

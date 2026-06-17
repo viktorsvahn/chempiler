@@ -1,5 +1,6 @@
 """Chempiler: chemical perception and analysis for reactive MD trajectories."""
 
 from .trajectory import ChempilerTrajectory
+from .rdf import plot_rdf
 
-__all__ = ["ChempilerTrajectory"]
+__all__ = ["ChempilerTrajectory", "plot_rdf"]

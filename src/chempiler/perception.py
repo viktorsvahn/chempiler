@@ -93,3 +93,28 @@ def build_molecules(atoms, mode="molecular", bond_scale=1.0, coordination_scale=
         groups.setdefault(root, []).append(int(i))
 
     return list(groups.values())
+
+
+def get_bonds(atoms, bond_scale=1.0):
+    """Return the set of covalent bond pairs for a single frame.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+    bond_scale : float
+        Same scale factor used when building molecules.
+
+    Returns
+    -------
+    frozenset of (int, int)
+        Each tuple is a bond ``(i, j)`` with ``i < j``.
+    """
+    cutoffs = [c * bond_scale for c in natural_cutoffs(atoms)]
+    nl = NeighborList(cutoffs, self_interaction=False, bothways=False)
+    nl.update(atoms)
+    bonds = set()
+    for i in range(len(atoms)):
+        for j in nl.get_neighbors(i)[0]:
+            j = int(j)
+            bonds.add((min(i, j), max(i, j)))
+    return frozenset(bonds)
