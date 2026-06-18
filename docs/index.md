@@ -46,6 +46,7 @@ frames, boundary = traj.reaction_window("HO", segment=0, buffer=10)
 | [11](tutorials/11_vanhove.md) | Van Hove self-correlation function |
 | [12](tutorials/12_proton_hops.md) | Proton hop network |
 | [13](tutorials/13_reactive_analysis.md) | Bond events, reaction windows, and peak environments |
+| [14](tutorials/14_plotting.md) | Plotting — `plot_rdf` with structure insets |
 
 ## Package layout
 

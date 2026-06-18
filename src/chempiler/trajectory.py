@@ -979,6 +979,8 @@ class ChempilerTrajectory:
         )
         peak_rs = r_v[1:-1][is_peak]
 
+        target_elem = target if isinstance(target, str) else next(iter(target.values()))
+
         def _molecule_cluster(frame, center_idx, r_min, r_max):
             pos = frame.atoms.get_positions().copy()
             cell = np.asarray(frame.atoms.get_cell())
@@ -996,7 +998,7 @@ class ChempilerTrajectory:
             # Find target atoms whose distance to center falls in the peak window.
             matching = [
                 i for i, (s, d) in enumerate(zip(syms, mic_dist))
-                if s == target and r_min <= d <= r_max
+                if s == target_elem and r_min <= d <= r_max
             ]
 
             # Collect whole molecules: center molecule + molecules of each match.

@@ -179,14 +179,14 @@ def _parse_fspec(fspec):
     return s, 0
 
 
-def _draw_cluster_2d(ax, atoms, margin=0.3):
+def _draw_cluster_2d(ax, atoms, margin=0.3, pcs=(0, 1)):
     from ase.data import covalent_radii, atomic_numbers
     from matplotlib.patches import Circle
     pos = atoms.get_positions()
     syms = atoms.get_chemical_symbols()
     c = pos - pos.mean(axis=0)
     _, _, Vt = np.linalg.svd(c, full_matrices=False)
-    xy = c @ Vt[:2].T  # project onto the two axes of greatest variance
+    xy = c @ Vt[list(pcs)].T  # project onto the selected pair of principal components
     radii = [covalent_radii[atomic_numbers[s]] for s in syms]
     for k, sym in enumerate(syms):
         circle = Circle(xy[k], radius=radii[k],
@@ -204,6 +204,7 @@ def _draw_cluster_2d(ax, atoms, margin=0.3):
 
 def plot_rdf(r, g, insets=None, ax=None,
              inset_w=0.13, inset_h=0.38, inset_y=0.56, inset_margin=0.2,
+             pcs=(0, 1),
              **line_kw):
     """Plot g(r) and optionally add per-peak structure insets.
 
@@ -212,20 +213,35 @@ def plot_rdf(r, g, insets=None, ax=None,
     r, g : array-like
         RDF arrays as returned by :func:`rdf`.
     insets : dict, optional
-        ``{peak_r: fspec}`` mapping.  Each value is either:
+        ``{peak_r: spec}`` mapping.  Each value is one of:
 
+        - an ``ase.Atoms`` object (cluster placed at the auto-computed x)
         - a file path string ``"path.xyz"`` (reads frame 0)
         - ``"path.xyz@N"`` to select frame *N* from a multi-frame file
-        - a dict ``{"file": fspec, "w": float, "h": float, "y": float}``
-          to override the inset size / position for that peak.
+        - a dict with any of the keys below to override defaults for that peak::
+
+            {
+                "atoms":  ase.Atoms,          # or "file": path
+                "x":      float,              # explicit x_left (axes-fraction)
+                "y":      float,              # bottom edge
+                "w":      float,              # width
+                "h":      float,              # height
+                "margin": float,              # CPK padding
+                "pcs":    (int, int),         # which PCs to project onto
+            }
+
     ax : matplotlib.axes.Axes, optional
         Axes to draw on.  A new figure is created when *None*.
     inset_w, inset_h, inset_y : float
         Default inset width, height, and bottom edge in axes-fraction
         coordinates.  Per-inset dicts can override these individually.
     inset_margin : float
-        Fractional padding added around the structure data in each inset
-        (passed to ``ax.margins``).  Increase if atoms are still clipped.
+        Fractional CPK padding passed to :func:`_draw_cluster_2d`.
+    pcs : tuple of two ints
+        Which pair of SVD principal components to project onto for the
+        2-D cluster drawing.  ``(0, 1)`` (default) uses the two axes of
+        greatest variance; ``(0, 2)`` or ``(1, 2)`` give alternative views.
+        Per-inset dicts can override this individually with a ``"pcs"`` key.
     **line_kw
         Passed directly to ``ax.plot`` for the g(r) line.
 
@@ -234,7 +250,7 @@ def plot_rdf(r, g, insets=None, ax=None,
     matplotlib.axes.Axes
     """
     import matplotlib.pyplot as plt
-    from ase.io import read as ase_read
+    from ase import Atoms as _AseAtoms
 
     r = np.asarray(r)
     g = np.asarray(g)
@@ -252,20 +268,31 @@ def plot_rdf(r, g, insets=None, ax=None,
 
         for rp, spec in insets.items():
             if isinstance(spec, dict):
-                fspec = spec['file']
-                w = spec.get('w', inset_w)
-                h = spec.get('h', inset_h)
-                y = spec.get('y', inset_y)
-                m = spec.get('margin', inset_margin)
+                raw    = spec.get('atoms') or spec.get('file')
+                w      = spec.get('w',      inset_w)
+                h      = spec.get('h',      inset_h)
+                y      = spec.get('y',      inset_y)
+                m      = spec.get('margin', inset_margin)
+                ipcs   = spec.get('pcs',    pcs)
+                x_over = spec.get('x',      None)
             else:
-                fspec, w, h, y, m = spec, inset_w, inset_h, inset_y, inset_margin
+                raw, w, h, y, m, ipcs, x_over = (
+                    spec, inset_w, inset_h, inset_y, inset_margin, pcs, None)
 
-            path, idx = _parse_fspec(fspec)
-            atoms = ase_read(path, index=idx)
+            if isinstance(raw, _AseAtoms):
+                atoms = raw
+            else:
+                from ase.io import read as ase_read
+                path, idx = _parse_fspec(raw)
+                atoms = ase_read(path, index=idx)
 
-            xf = (float(rp) - r_min) / (r_max - r_min)
-            xf = float(np.clip(xf - w / 2, 0.01, 1.0 - w - 0.01))
+            if x_over is not None:
+                xf = float(x_over)
+            else:
+                xf = (float(rp) - r_min) / (r_max - r_min)
+                xf = float(np.clip(xf - w / 2, 0.01, 1.0 - w - 0.01))
+
             ins = ax.inset_axes([xf, y, w, h])
-            _draw_cluster_2d(ins, atoms, margin=m)
+            _draw_cluster_2d(ins, atoms, margin=m, pcs=ipcs)
 
     return ax
