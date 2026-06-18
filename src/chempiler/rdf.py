@@ -214,7 +214,7 @@ def _draw_cluster_2d(ax, atoms, margin=0.3, view=2):
 
 def plot_rdf(r, g, insets=None, ax=None,
              inset_w=0.13, inset_h=0.38, inset_y=0.56, inset_margin=0.2,
-             **line_kw):
+             figsize=(10, 5), **line_kw):
     """Plot g(r) and optionally add per-peak structure insets.
 
     Parameters
@@ -249,7 +249,7 @@ def plot_rdf(r, g, insets=None, ax=None,
     g = np.asarray(g)
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(10, 5))
+        _, ax = plt.subplots(figsize=figsize)
 
     line_kw.setdefault('lw', 1.5)
     ax.plot(r, g, **line_kw)
