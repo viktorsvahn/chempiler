@@ -158,13 +158,18 @@ def rdf(frames, center, target, rmax=None, dr=0.02, integrate=False, n_workers=1
 # Plotting
 # ---------------------------------------------------------------------------
 
+# Jmol hue semantics (element recognisability) with Paul Tol's perceptually
+# uniform, colourblind-safe values (https://personal.sron.nl/~pault/).
+# Orange for P is borrowed from Tol vibrant — Tol bright has no orange.
 _ELEM_COLOR = {
-    'H': '#c8d8f0', 'C': '#444444', 'N': '#4169e1', 'O': '#d62728',
-    'F': '#2ca02c', 'S': '#bcbd22', 'Cl': '#17becf', 'P': '#e377c2',
-}
-_ELEM_SIZE = {
-    'H': 110, 'C': 240, 'N': 240, 'O': 300, 'F': 200, 'S': 320,
-    'Cl': 320, 'P': 300,
+    'H':  '#BBBBBB',  # Tol grey   (Jmol: white — invisible on white bg)
+    'C':  '#555555',  # dark grey  (Jmol: #909090 — darkened for contrast)
+    'N':  '#4477AA',  # Tol blue
+    'O':  '#EE6677',  # Tol red
+    'F':  '#66CCEE',  # Tol cyan   (distinct from Cl green)
+    'S':  '#CCBB44',  # Tol yellow (Jmol: bright yellow — weak on white bg)
+    'Cl': '#228833',  # Tol green
+    'P':  '#EE7733',  # Tol vibrant orange
 }
 
 
@@ -187,15 +192,19 @@ def _draw_cluster_2d(ax, atoms, margin=0.3, view=2):
     c = pos - pos.mean(axis=0)
     _, _, Vt = np.linalg.svd(c, full_matrices=True)
     plane = [i for i in range(3) if i != view]
-    xy = c @ Vt[plane].T  # project onto the two PCs not along the view axis
-    radii = [covalent_radii[atomic_numbers[s]] for s in syms]
+    xy = c @ Vt[plane].T
+    radii = np.array([covalent_radii[atomic_numbers[s]] for s in syms])
+
     for k, sym in enumerate(syms):
-        circle = Circle(xy[k], radius=radii[k],
-                        color=_ELEM_COLOR.get(sym, '#7f7f7f'),
-                        ec='#222', lw=0.4, zorder=2)
-        ax.add_patch(circle)
-    # Limit includes atom radii so circles are never clipped.
-    half = np.abs(xy).max() + max(radii)
+        r = radii[k]
+        ax.add_patch(Circle(xy[k], radius=r,
+                            color=_ELEM_COLOR.get(sym, '#BBBBBB'),
+                            ec='#111', lw=0.65, zorder=2))
+        ax.add_patch(Circle((xy[k][0] - 0.3 * r, xy[k][1] + 0.3 * r),
+                            radius=0.18 * r,
+                            color='white', alpha=0.6, lw=0, zorder=3))
+
+    half = float(np.abs(xy).max() + radii.max())
     pad = half * margin
     ax.set_xlim(-half - pad, half + pad)
     ax.set_ylim(-half - pad, half + pad)
@@ -217,16 +226,15 @@ def plot_rdf(r, g, insets=None, ax=None,
 
         - a file path string ``"path.xyz"`` (reads frame 0)
         - ``"path.xyz@N"`` to select frame *N* from a multi-frame file
-        - a dict ``{"file": fspec, "w": float, "h": float, "y": float}``
-          to override the inset size / position for that peak.
+        - a dict ``{"file": fspec, "w": float, "h": float, "y": float,
+          "color_scheme": str}`` to override per-inset options.
     ax : matplotlib.axes.Axes, optional
         Axes to draw on.  A new figure is created when *None*.
     inset_w, inset_h, inset_y : float
         Default inset width, height, and bottom edge in axes-fraction
         coordinates.  Per-inset dicts can override these individually.
     inset_margin : float
-        Fractional padding added around the structure data in each inset
-        (passed to ``ax.margins``).  Increase if atoms are still clipped.
+        Fractional padding added around the structure data in each inset.
     **line_kw
         Passed directly to ``ax.plot`` for the g(r) line.
 
@@ -254,8 +262,9 @@ def plot_rdf(r, g, insets=None, ax=None,
         for rp, spec in insets.items():
             if isinstance(spec, dict):
                 fspec = spec['file']
-                w = spec.get('w', inset_w)
-                h = spec.get('h', inset_h)
+                scale = spec.get('scale', 1.0)
+                w = spec.get('w', inset_w) * scale
+                h = spec.get('h', inset_h) * scale
                 y = spec.get('y', inset_y)
                 m = spec.get('margin', inset_margin)
                 view = spec.get('view', 2)
