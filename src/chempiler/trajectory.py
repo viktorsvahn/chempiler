@@ -979,42 +979,68 @@ class ChempilerTrajectory:
         )
         peak_rs = r_v[1:-1][is_peak]
 
-        def _molecule_cluster(frame, center_idx, r_min, r_max):
+        def _molecule_cluster(frame, center_idx, max_shell):
+            from .selectors import resolve as _resolve
             pos = frame.atoms.get_positions().copy()
             cell = np.asarray(frame.atoms.get_cell())
             inv_cell = np.linalg.inv(cell)
             syms = frame.atoms.get_chemical_symbols()
-            ref = pos[center_idx]
+            r_max = float(r[-1])
 
-            # MIC displacement of every atom from the center atom.
-            diff = pos - ref
+            diff = pos - pos[center_idx]
             frac = diff @ inv_cell
             frac -= np.round(frac)
             mic_disp = frac @ cell
             mic_dist = np.linalg.norm(mic_disp, axis=1)
 
-            # Find target atoms whose distance to center falls in the peak window.
-            matching = [
-                i for i, (s, d) in enumerate(zip(syms, mic_dist))
-                if s == target and r_min <= d <= r_max
-            ]
+            center_mol = int(frame.atom_to_mol[center_idx])
+            target_idx = set(_resolve(frame, target).tolist())
 
-            # Collect whole molecules: center molecule + molecules of each match.
-            mol_set = {int(frame.atom_to_mol[center_idx])}
-            for ti in matching:
-                mi = int(frame.atom_to_mol[ti])
-                if mi >= 0:
-                    mol_set.add(mi)
+            # For each non-center molecule find its nearest target-atom distance.
+            mol_nearest_d = {}
+            for atom_idx in target_idx:
+                mol_idx = int(frame.atom_to_mol[atom_idx])
+                if mol_idx == center_mol or mol_idx < 0:
+                    continue
+                d = float(mic_dist[atom_idx])
+                if d > r_max:
+                    continue
+                if mol_idx not in mol_nearest_d or d < mol_nearest_d[mol_idx]:
+                    mol_nearest_d[mol_idx] = d
+
+            # Shell boundaries: midpoint between consecutive peaks.
+            # Last shell gets the same half-gap as the previous interval so it
+            # has a finite upper bound — molecules beyond it are excluded.
+            bounds = np.empty(len(peak_rs) + 1)
+            bounds[0] = 0.0
+            for k in range(len(peak_rs) - 1):
+                bounds[k + 1] = (peak_rs[k] + peak_rs[k + 1]) / 2
+            # Last shell has no next peak to mirror against, so extend by a
+            # full inter-peak gap (not half) to cover the complete outer shell.
+            outer = ((float(peak_rs[-1]) - float(peak_rs[-2])) if len(peak_rs) > 1
+                     else float(r[-1]) - float(peak_rs[-1]))
+            bounds[-1] = float(peak_rs[-1]) + outer
+
+            mol_shells: dict[int, list[int]] = {}
+            for mol_idx, d in mol_nearest_d.items():
+                idx = int(np.searchsorted(bounds, d, side='right')) - 1
+                if 0 <= idx < len(peak_rs):
+                    mol_shells.setdefault(idx, []).append(mol_idx)
+
+            # Non-cumulative: center molecule + only the molecules in this shell.
+            mol_set = {center_mol}
+            for mol_idx in mol_shells.get(max_shell, []):
+                mol_set.add(mol_idx)
 
             keep = sorted({a for mi in mol_set for a in frame.molecules[mi]})
             return Atoms(
                 symbols=[syms[i] for i in keep],
-                positions=mic_disp[keep],   # center atom at origin
+                positions=mic_disp[keep],
                 pbc=False,
             )
 
         result = {}
-        for rp in peak_rs:
+        for i, rp in enumerate(peak_rs):
             hits = self.frames_at_distance(
                 center, target,
                 r_min=rp - peak_dr, r_max=rp + peak_dr,
@@ -1029,9 +1055,152 @@ class ChempilerTrajectory:
                 seen.add(fi)
                 clusters.append(_molecule_cluster(
                     self.frames[fi], h['center_atom'],
-                    rp - peak_dr, rp + peak_dr,
+                    i,  # max_shell = index of current peak
                 ))
                 if len(clusters) == n_per_peak:
+                    break
+            if clusters:
+                result[float(round(rp, 4))] = clusters
+
+        return result
+
+    def rdf_shell_environments(self, center, target, rdf,
+                                n_per_shell=3,
+                                peak_min_g=0.5,
+                                stride=20,
+                                smooth_sigma=0.0):
+        """Extract representative clusters for each trough-delimited coordination shell.
+
+        Shells are defined by the troughs (g(r) minima) between consecutive peaks
+        rather than a fixed window around each peak.  For shell N the interval is
+        ``[trough_{N-1}, trough_N]``, with the first shell starting at 0 and the
+        last ending at the maximum r of the supplied RDF.
+
+        Using troughs as boundaries is more robust than peak-based cutoffs because
+        the pair density is at a minimum at a trough, so very few molecules will
+        straddle the boundary.  Every whole molecule whose target atom falls inside
+        the shell interval is included — no atom is ever cut off at an arbitrary
+        distance.
+
+        Parameters
+        ----------
+        center : str or dict
+            Selector for the central atom, same syntax as :meth:`rdf`.
+        target : str or dict
+            Selector for the target atom, same syntax as :meth:`rdf`.
+        rdf : tuple of (array-like, array-like)
+            ``(r, g)`` arrays as returned by :meth:`rdf`.
+        n_per_shell : int
+            Maximum number of representative clusters to return per shell.
+        peak_min_g : float
+            Minimum g(r) height to qualify as a peak.
+        stride : int
+            Check every *stride*-th frame when searching for hits.
+        smooth_sigma : float
+            Standard deviation in Å of a Gaussian applied to g(r) before peak
+            and trough detection.  ``0`` disables smoothing (default).
+
+        Returns
+        -------
+        dict of {float: list of ase.Atoms}
+            Keys are peak positions (Å, rounded to 4 dp) — suitable as drop-in
+            replacement for :meth:`rdf_peak_environments` when passed to
+            :func:`~chempiler.rdf.plot_rdf` as ``insets``.  Values are up to
+            *n_per_shell* clusters, each containing all whole molecules in the
+            corresponding shell interval, centred on the center atom, pbc=False.
+        """
+        import numpy as np
+        from ase import Atoms
+        from .selectors import resolve
+
+        r, g = np.asarray(rdf[0]), np.asarray(rdf[1])
+
+        if smooth_sigma > 0.0:
+            dr_step = float(r[1] - r[0])
+            sigma_bins = smooth_sigma / dr_step
+            half_w = max(1, int(4 * sigma_bins))
+            x = np.arange(-half_w, half_w + 1, dtype=float)
+            kernel = np.exp(-0.5 * (x / sigma_bins) ** 2)
+            kernel /= kernel.sum()
+            g_det = np.convolve(g, kernel, mode='same')
+        else:
+            g_det = g
+
+        valid = r > 0.5
+        r_v, g_v = r[valid], g_det[valid]
+        is_peak = (
+            (g_v[1:-1] > g_v[:-2]) &
+            (g_v[1:-1] > g_v[2:]) &
+            (g_v[1:-1] > peak_min_g)
+        )
+        peak_rs = r_v[1:-1][is_peak]
+
+        if len(peak_rs) == 0:
+            return {}
+
+        # Trough between each consecutive peak pair is the density minimum in
+        # that interval — this is where the shell boundary is least likely to
+        # bisect a molecule.
+        trough_rs = [0.0]
+        for i in range(len(peak_rs) - 1):
+            r1, r2 = peak_rs[i], peak_rs[i + 1]
+            mask = (r >= r1) & (r <= r2)
+            if mask.sum() < 3:
+                trough_rs.append(float(0.5 * (r1 + r2)))
+            else:
+                min_idx = int(np.argmin(g_det[mask]))
+                trough_rs.append(float(r[mask][min_idx]))
+        trough_rs.append(float(r[-1]))
+
+        def _shell_cluster(frame, center_idx, r_low, r_high):
+            pos = frame.atoms.get_positions().copy()
+            cell = np.asarray(frame.atoms.get_cell())
+            inv_cell = np.linalg.inv(cell)
+            syms = frame.atoms.get_chemical_symbols()
+
+            diff = pos - pos[center_idx]
+            frac = diff @ inv_cell
+            frac -= np.round(frac)
+            mic_disp = frac @ cell
+            mic_dist = np.linalg.norm(mic_disp, axis=1)
+
+            # resolve() handles both plain-string and dict selectors correctly.
+            t_idx = set(resolve(frame, target).tolist())
+            matching = [i for i in t_idx if r_low <= mic_dist[i] <= r_high]
+
+            mol_set = {int(frame.atom_to_mol[center_idx])}
+            for ti in matching:
+                mi = int(frame.atom_to_mol[ti])
+                if mi >= 0:
+                    mol_set.add(mi)
+
+            keep = sorted({a for mi in mol_set for a in frame.molecules[mi]})
+            return Atoms(
+                symbols=[syms[i] for i in keep],
+                positions=mic_disp[keep],
+                pbc=False,
+            )
+
+        result = {}
+        for i, rp in enumerate(peak_rs):
+            r_low, r_high = trough_rs[i], trough_rs[i + 1]
+            hits = self.frames_at_distance(
+                center, target,
+                r_min=r_low, r_max=r_high,
+                stride=stride,
+            )
+            seen = set()
+            clusters = []
+            for h in hits:
+                fi = h['frame']
+                if fi in seen:
+                    continue
+                seen.add(fi)
+                clusters.append(_shell_cluster(
+                    self.frames[fi], h['center_atom'],
+                    r_low, r_high,
+                ))
+                if len(clusters) == n_per_shell:
                     break
             if clusters:
                 result[float(round(rp, 4))] = clusters

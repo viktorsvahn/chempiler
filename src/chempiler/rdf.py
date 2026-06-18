@@ -179,14 +179,15 @@ def _parse_fspec(fspec):
     return s, 0
 
 
-def _draw_cluster_2d(ax, atoms, margin=0.3):
+def _draw_cluster_2d(ax, atoms, margin=0.3, view=2):
     from ase.data import covalent_radii, atomic_numbers
     from matplotlib.patches import Circle
     pos = atoms.get_positions()
     syms = atoms.get_chemical_symbols()
     c = pos - pos.mean(axis=0)
-    _, _, Vt = np.linalg.svd(c, full_matrices=False)
-    xy = c @ Vt[:2].T  # project onto the two axes of greatest variance
+    _, _, Vt = np.linalg.svd(c, full_matrices=True)
+    plane = [i for i in range(3) if i != view]
+    xy = c @ Vt[plane].T  # project onto the two PCs not along the view axis
     radii = [covalent_radii[atomic_numbers[s]] for s in syms]
     for k, sym in enumerate(syms):
         circle = Circle(xy[k], radius=radii[k],
@@ -257,8 +258,9 @@ def plot_rdf(r, g, insets=None, ax=None,
                 h = spec.get('h', inset_h)
                 y = spec.get('y', inset_y)
                 m = spec.get('margin', inset_margin)
+                view = spec.get('view', 2)
             else:
-                fspec, w, h, y, m = spec, inset_w, inset_h, inset_y, inset_margin
+                fspec, w, h, y, m, view = spec, inset_w, inset_h, inset_y, inset_margin, 2
 
             path, idx = _parse_fspec(fspec)
             atoms = ase_read(path, index=idx)
@@ -266,6 +268,6 @@ def plot_rdf(r, g, insets=None, ax=None,
             xf = (float(rp) - r_min) / (r_max - r_min)
             xf = float(np.clip(xf - w / 2, 0.01, 1.0 - w - 0.01))
             ins = ax.inset_axes([xf, y, w, h])
-            _draw_cluster_2d(ins, atoms, margin=m)
+            _draw_cluster_2d(ins, atoms, margin=m, view=view)
 
     return ax

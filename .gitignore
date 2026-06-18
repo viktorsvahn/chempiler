@@ -78,6 +78,10 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Generated output files
+tests/output/*.xyz
+tests/output/*.h5
+
 # IPython
 profile_default/
 ipython_config.py
