@@ -1033,11 +1033,13 @@ class ChempilerTrajectory:
                 mol_set.add(mol_idx)
 
             keep = sorted({a for mi in mol_set for a in frame.molecules[mi]})
-            return Atoms(
+            atoms = Atoms(
                 symbols=[syms[i] for i in keep],
                 positions=mic_disp[keep],
                 pbc=False,
             )
+            atoms.info['center_atom'] = keep.index(center_idx)
+            return atoms
 
         result = {}
         for i, rp in enumerate(peak_rs):
