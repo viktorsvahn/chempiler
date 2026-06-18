@@ -158,13 +158,18 @@ def rdf(frames, center, target, rmax=None, dr=0.02, integrate=False, n_workers=1
 # Plotting
 # ---------------------------------------------------------------------------
 
+# Jmol hue semantics (element recognisability) with Paul Tol's perceptually
+# uniform, colourblind-safe values (https://personal.sron.nl/~pault/).
+# Orange for P is borrowed from Tol vibrant — Tol bright has no orange.
 _ELEM_COLOR = {
-    'H': '#c8d8f0', 'C': '#444444', 'N': '#4169e1', 'O': '#d62728',
-    'F': '#2ca02c', 'S': '#bcbd22', 'Cl': '#17becf', 'P': '#e377c2',
-}
-_ELEM_SIZE = {
-    'H': 110, 'C': 240, 'N': 240, 'O': 300, 'F': 200, 'S': 320,
-    'Cl': 320, 'P': 300,
+    'H':  '#BBBBBB',  # Tol grey   (Jmol: white — invisible on white bg)
+    'C':  '#555555',  # dark grey  (Jmol: #909090 — darkened for contrast)
+    'N':  '#4477AA',  # Tol blue
+    'O':  '#EE6677',  # Tol red
+    'F':  '#66CCEE',  # Tol cyan   (distinct from Cl green)
+    'S':  '#CCBB44',  # Tol yellow (Jmol: bright yellow — weak on white bg)
+    'Cl': '#228833',  # Tol green
+    'P':  '#EE7733',  # Tol vibrant orange
 }
 
 
@@ -179,33 +184,45 @@ def _parse_fspec(fspec):
     return s, 0
 
 
-def _draw_cluster_2d(ax, atoms, margin=0.3, pcs=(0, 1)):
+def _draw_cluster_2d(ax, atoms, margin=0.3, view=2, view_range=None):
     from ase.data import covalent_radii, atomic_numbers
     from matplotlib.patches import Circle
     pos = atoms.get_positions()
     syms = atoms.get_chemical_symbols()
+    ci = atoms.info.get('center_atom', 0)
+
+    # PCA on cluster centroid for stable orientation; display centred on center atom.
     c = pos - pos.mean(axis=0)
-    _, _, Vt = np.linalg.svd(c, full_matrices=False)
-    xy = c @ Vt[list(pcs)].T  # project onto the selected pair of principal components
-    radii = [covalent_radii[atomic_numbers[s]] for s in syms]
+    _, _, Vt = np.linalg.svd(c, full_matrices=True)
+    plane = [i for i in range(3) if i != view]
+    xy = pos @ Vt[plane].T
+    xy -= xy[ci]   # shift so center atom sits at (0, 0)
+
+    radii = np.array([covalent_radii[atomic_numbers[s]] for s in syms])
+
     for k, sym in enumerate(syms):
-        circle = Circle(xy[k], radius=radii[k],
-                        color=_ELEM_COLOR.get(sym, '#7f7f7f'),
-                        ec='#222', lw=0.4, zorder=2)
-        ax.add_patch(circle)
-    # Limit includes atom radii so circles are never clipped.
-    half = np.abs(xy).max() + max(radii)
-    pad = half * margin
-    ax.set_xlim(-half - pad, half + pad)
-    ax.set_ylim(-half - pad, half + pad)
+        r = radii[k]
+        ax.add_patch(Circle(xy[k], radius=r,
+                            color=_ELEM_COLOR.get(sym, '#BBBBBB'),
+                            ec='#111', lw=0.65, zorder=2))
+        ax.add_patch(Circle((xy[k][0] - 0.3 * r, xy[k][1] + 0.3 * r),
+                            radius=0.18 * r,
+                            color='white', alpha=0.6, lw=0, zorder=3))
+
+    if view_range is None:
+        half = float(np.abs(xy).max() + radii.max())
+        lim = half * (1 + margin)
+    else:
+        lim = float(view_range)
+    ax.set_xlim(-lim, lim)
+    ax.set_ylim(-lim, lim)
     ax.set_aspect('equal')
     ax.axis('off')
 
 
 def plot_rdf(r, g, insets=None, ax=None,
-             inset_w=0.13, inset_h=0.38, inset_y=0.56, inset_margin=0.2,
-             pcs=(0, 1),
-             **line_kw):
+             inset_w=0.13, inset_h=0.38, inset_y=0.75, inset_margin=0.2,
+             atomic_scale=None, figsize=(10, 5), **line_kw):
     """Plot g(r) and optionally add per-peak structure insets.
 
     Parameters
@@ -218,30 +235,15 @@ def plot_rdf(r, g, insets=None, ax=None,
         - an ``ase.Atoms`` object (cluster placed at the auto-computed x)
         - a file path string ``"path.xyz"`` (reads frame 0)
         - ``"path.xyz@N"`` to select frame *N* from a multi-frame file
-        - a dict with any of the keys below to override defaults for that peak::
-
-            {
-                "atoms":  ase.Atoms,          # or "file": path
-                "x":      float,              # explicit x_left (axes-fraction)
-                "y":      float,              # bottom edge
-                "w":      float,              # width
-                "h":      float,              # height
-                "margin": float,              # CPK padding
-                "pcs":    (int, int),         # which PCs to project onto
-            }
-
+        - a dict ``{"file": fspec, "w": float, "h": float, "y": float,
+          "color_scheme": str}`` to override per-inset options.
     ax : matplotlib.axes.Axes, optional
         Axes to draw on.  A new figure is created when *None*.
     inset_w, inset_h, inset_y : float
         Default inset width, height, and bottom edge in axes-fraction
         coordinates.  Per-inset dicts can override these individually.
     inset_margin : float
-        Fractional CPK padding passed to :func:`_draw_cluster_2d`.
-    pcs : tuple of two ints
-        Which pair of SVD principal components to project onto for the
-        2-D cluster drawing.  ``(0, 1)`` (default) uses the two axes of
-        greatest variance; ``(0, 2)`` or ``(1, 2)`` give alternative views.
-        Per-inset dicts can override this individually with a ``"pcs"`` key.
+        Fractional padding added around the structure data in each inset.
     **line_kw
         Passed directly to ``ax.plot`` for the g(r) line.
 
@@ -256,7 +258,7 @@ def plot_rdf(r, g, insets=None, ax=None,
     g = np.asarray(g)
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(10, 5))
+        _, ax = plt.subplots(figsize=figsize)
 
     line_kw.setdefault('lw', 1.5)
     ax.plot(r, g, **line_kw)
@@ -264,35 +266,58 @@ def plot_rdf(r, g, insets=None, ax=None,
     ax.set_ylabel('g(r)')
 
     if insets:
+        from ase.data import covalent_radii, atomic_numbers as _anum
         r_min, r_max = float(r[0]), float(r[-1])
 
+        # Parse specs and load atoms in one pass.
+        parsed = []
         for rp, spec in insets.items():
             if isinstance(spec, dict):
-                raw    = spec.get('atoms') or spec.get('file')
-                w      = spec.get('w',      inset_w)
-                h      = spec.get('h',      inset_h)
-                y      = spec.get('y',      inset_y)
-                m      = spec.get('margin', inset_margin)
-                ipcs   = spec.get('pcs',    pcs)
-                x_over = spec.get('x',      None)
+                fspec = spec['file']
+                s = spec.get('scale', 1.0)
+                w = spec.get('w', inset_w) * s
+                h = spec.get('h', inset_h) * s
+                y = spec.get('y', inset_y)
+                m = spec.get('margin', inset_margin)
+                view = spec.get('view', 2)
             else:
-                raw, w, h, y, m, ipcs, x_over = (
-                    spec, inset_w, inset_h, inset_y, inset_margin, pcs, None)
+                fspec, w, h, y, m, view = spec, inset_w, inset_h, inset_y, inset_margin, 2
 
-            if isinstance(raw, _AseAtoms):
-                atoms = raw
-            else:
-                from ase.io import read as ase_read
-                path, idx = _parse_fspec(raw)
-                atoms = ase_read(path, index=idx)
+            path, idx = _parse_fspec(fspec)
+            atoms = ase_read(path, index=idx)
+            parsed.append((rp, atoms, w, h, y, m, view))
 
-            if x_over is not None:
-                xf = float(x_over)
-            else:
-                xf = (float(rp) - r_min) / (r_max - r_min)
-                xf = float(np.clip(xf - w / 2, 0.01, 1.0 - w - 0.01))
+        # When atomic_scale is set, unify the view range across all insets (so the
+        # central atom appears the same physical size in every inset) and scale the
+        # inset box by atomic_scale. Keeping the view range fixed at the largest
+        # natural extent avoids clipping; a larger box makes atoms appear bigger.
+        if atomic_scale is not None:
+            max_nat = 0.0
+            for _, atoms, _, _, _, m, view in parsed:
+                pos = atoms.get_positions()
+                ci = atoms.info.get('center_atom', 0)
+                c = pos - pos.mean(axis=0)
+                _, _, Vt = np.linalg.svd(c, full_matrices=True)
+                plane = [i for i in range(3) if i != view]
+                xy_p = pos @ Vt[plane].T
+                xy_p -= xy_p[ci]
+                radii_a = np.array([covalent_radii[_anum[s]] for s in atoms.get_chemical_symbols()])
+                half = float(np.abs(xy_p).max() + radii_a.max())
+                max_nat = max(max_nat, half * (1 + m))
+            unified_vr = max_nat
+        else:
+            unified_vr = None
 
-            ins = ax.inset_axes([xf, y, w, h])
-            _draw_cluster_2d(ins, atoms, margin=m, pcs=ipcs)
+        for rp, atoms, w, h, y, m, view in parsed:
+            w_eff = w * atomic_scale if atomic_scale is not None else w
+            h_eff = h * atomic_scale if atomic_scale is not None else h
+            xf = (float(rp) - r_min) / (r_max - r_min)
+            xf = float(np.clip(xf - w_eff / 2, 0.01, 1.0 - w_eff - 0.01))
+            ins = ax.inset_axes([xf, y - h_eff / 2, w_eff, h_eff])
+            ins.set_in_layout(False)
+            _draw_cluster_2d(ins, atoms, margin=m, view=view, view_range=unified_vr)
+            ins.set_clip_on(False)
+            for patch in ins.patches:
+                patch.set_clip_on(False)
 
     return ax
