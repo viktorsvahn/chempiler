@@ -18,6 +18,7 @@ from itertools import repeat
 
 import numpy as np
 from ase.geometry import find_mic
+from ase.io import read as ase_read
 
 from .selectors import resolve
 
