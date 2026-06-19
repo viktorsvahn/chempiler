@@ -156,6 +156,115 @@ def rdf(frames, center, target, rmax=None, dr=0.02, integrate=False, n_workers=1
 
 
 # ---------------------------------------------------------------------------
+# Shell analysis
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass
+
+
+@dataclass
+class ShellInfo:
+    """Coordination shell structure extracted from a g(r) curve.
+
+    Attributes
+    ----------
+    peaks : np.ndarray
+        Detected peak positions (Å).
+    troughs : np.ndarray
+        Shell boundaries (Å), length ``len(peaks) + 1``.  Always starts at
+        0.0 and ends at the last r value of the input grid.
+    cns : np.ndarray or None
+        Cumulative coordination number at the outer boundary of each shell,
+        i.e. ``cns[i] = n(troughs[i+1])``, length ``len(peaks)``.
+        ``None`` when no coordination array was supplied.
+        Per-shell (annular) CNs are ``np.diff(cns)`` if needed.
+    """
+    peaks: np.ndarray
+    troughs: np.ndarray
+    cns: "np.ndarray | None"
+
+
+def rdf_shells(r, g, n=None, *, peak_min_g=0.5, smooth_sigma=0.0):
+    """Detect coordination shells in a pre-computed g(r).
+
+    Parameters
+    ----------
+    r, g : array-like
+        Distance grid and g(r) values as returned by :func:`rdf`.
+    n : array-like, optional
+        Running coordination number from :func:`rdf` (``integrate=True``).
+        When supplied, per-shell and cumulative CNs are computed.
+    peak_min_g : float
+        Minimum g(r) height to qualify as a peak (default 0.5).
+    smooth_sigma : float
+        Standard deviation in Å of a Gaussian applied to g(r) before
+        peak/trough detection.  ``0`` disables smoothing (default).
+
+    Returns
+    -------
+    ShellInfo
+        ``.peaks`` — peak positions; ``.troughs`` — shell boundaries
+        (length ``len(peaks) + 1``, starts at 0.0); ``.cns[i]`` —
+        cumulative CN at ``troughs[i+1]``.  ``None`` when *n* is not
+        supplied.  Per-shell annular CNs are ``np.diff(cns)``.
+    """
+    r = np.asarray(r, dtype=float)
+    g = np.asarray(g, dtype=float)
+
+    if smooth_sigma > 0.0:
+        dr_step = float(r[1] - r[0])
+        sigma_bins = smooth_sigma / dr_step
+        half_w = max(1, int(4 * sigma_bins))
+        x = np.arange(-half_w, half_w + 1, dtype=float)
+        kernel = np.exp(-0.5 * (x / sigma_bins) ** 2)
+        kernel /= kernel.sum()
+        g_det = np.convolve(g, kernel, mode='same')
+    else:
+        g_det = g
+
+    valid = r > 0.5
+    r_v, g_v = r[valid], g_det[valid]
+    is_peak = (
+        (g_v[1:-1] > g_v[:-2]) &
+        (g_v[1:-1] > g_v[2:]) &
+        (g_v[1:-1] > peak_min_g)
+    )
+    peaks = r_v[1:-1][is_peak].copy()
+
+    troughs = [0.0]
+    for i in range(len(peaks) - 1):
+        r1, r2 = float(peaks[i]), float(peaks[i + 1])
+        mask = (r >= r1) & (r <= r2)
+        if mask.sum() < 3:
+            troughs.append(0.5 * (r1 + r2))
+        else:
+            troughs.append(float(r[mask][int(np.argmin(g_det[mask]))]))
+    troughs.append(float(r[-1]))
+    troughs = np.array(troughs)
+
+    if n is not None:
+        n_arr = np.asarray(n, dtype=float)
+        cns = np.array([float(np.interp(t, r, n_arr)) for t in troughs[1:]])
+    else:
+        cns = None
+
+    return ShellInfo(peaks=peaks, troughs=troughs, cns=cns)
+
+
+class ShellEnvironments(dict):
+    """dict of ``{peak_r: [ase.Atoms]}`` with an attached :class:`ShellInfo`.
+
+    Behaves exactly like a plain dict (drop-in for *plot_rdf* ``insets``),
+    but also exposes ``.shells`` so peaks, troughs, and CNs are accessible
+    without recomputing them.
+    """
+
+    def __init__(self, data, shells: ShellInfo):
+        super().__init__(data)
+        self.shells = shells
+
+
+# ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
 
@@ -263,8 +372,8 @@ def plot_rdf(r, g, insets=None, ax=None,
 
     line_kw.setdefault('lw', 1.5)
     ax.plot(r, g, **line_kw)
-    ax.set_xlabel('r (Å)')
-    ax.set_ylabel('g(r)')
+    ax.set_xlabel('')
+    ax.set_ylabel('')
 
     if insets:
         from ase.data import covalent_radii, atomic_numbers as _anum
@@ -284,8 +393,11 @@ def plot_rdf(r, g, insets=None, ax=None,
             else:
                 fspec, w, h, y, m, view = spec, inset_w, inset_h, inset_y, inset_margin, 2
 
-            path, idx = _parse_fspec(fspec)
-            atoms = ase_read(path, index=idx)
+            if isinstance(fspec, _AseAtoms):
+                atoms = fspec
+            else:
+                path, idx = _parse_fspec(fspec)
+                atoms = ase_read(path, index=idx)
             parsed.append((rp, atoms, w, h, y, m, view))
 
         # When atomic_scale is set, unify the view range across all insets (so the
