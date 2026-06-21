@@ -3,7 +3,7 @@
 from ase import Atoms
 
 
-def show(structures, labels=None):
+def show(structures, labels=None, index=0):
     """Display structures interactively using ASE's x3d viewer inline in Jupyter.
 
     Parameters
@@ -38,7 +38,7 @@ def show(structures, labels=None):
     if isinstance(structures, dict):
         for key, val in structures.items():
             label = f"r = {key:.3f} Å" if isinstance(key, float) else str(key)
-            atoms = _load(val[0] if isinstance(val, list) else val)
+            atoms = _load(val[index] if isinstance(val, list) else val)
             _render(label, atoms)
 
     elif isinstance(structures, (list, tuple)):

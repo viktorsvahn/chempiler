@@ -278,6 +278,73 @@ def _recenter(frames, center_atoms=None, center_coords=None, wrap=False):
     return result
 
 
+def _apply_persistence(frames, persistence):
+    """Remove molecular assignments that appear for fewer than *persistence*
+    consecutive frames, replacing them with the surrounding stable assignment.
+
+    Identifies each atom's molecule by the frozenset of all atom indices in
+    that molecule. A "blip" is a run of a different frozenset that (a) lasts
+    fewer than *persistence* frames and (b) is surrounded on both sides by the
+    same frozenset. Blips are reverted to the surrounding value; affected
+    frames are rebuilt.
+
+    The most common artifact suppressed is two water molecules briefly merging
+    into H4O2 during an O–H stretch that momentarily crosses the bond cutoff.
+    """
+    if persistence <= 1 or not frames:
+        return frames
+
+    from .frame import Frame
+
+    n_frames = len(frames)
+    n_atoms  = len(frames[0].atoms)
+
+    mol_membership = []
+    for frame in frames:
+        membership = [None] * n_atoms
+        for mol in frame.molecules:
+            fs = frozenset(mol)
+            for atom in mol:
+                membership[atom] = fs
+        mol_membership.append(membership)
+
+    corrected = [list(m) for m in mol_membership]
+
+    for atom_i in range(n_atoms):
+        seq = [mol_membership[t][atom_i] for t in range(n_frames)]
+        t = 0
+        while t < n_frames:
+            val     = seq[t]
+            run_end = t
+            while run_end < n_frames and seq[run_end] == val:
+                run_end += 1
+            run_len = run_end - t
+            if run_len < persistence and t > 0 and run_end < n_frames:
+                if seq[t - 1] == seq[run_end]:
+                    for tf in range(t, run_end):
+                        corrected[tf][atom_i] = seq[t - 1]
+            t = run_end
+
+    n_fixed = 0
+    for t in range(n_frames):
+        if corrected[t] != list(mol_membership[t]):
+            mols_dict = {}
+            for atom_i, fs in enumerate(corrected[t]):
+                if fs is not None:
+                    mols_dict.setdefault(fs, []).append(atom_i)
+            new_frame = Frame(
+                atoms=frames[t].atoms,
+                molecules=[sorted(v) for v in mols_dict.values()],
+            )
+            new_frame.build()
+            frames[t] = new_frame
+            n_fixed += 1
+
+    if n_fixed:
+        print(f"[Chempiler] persistence={persistence}: corrected {n_fixed} frames")
+    return frames
+
+
 class ChempilerTrajectory:
     """Load an ASE-readable trajectory and expose analysis methods.
 
@@ -346,7 +413,7 @@ class ChempilerTrajectory:
         self.sphere_cutoffs = sphere_cutoffs  # None → auto-detect at build time
         self.frames = []
 
-    def build(self, max_frames=None, cache_file=None):
+    def build(self, max_frames=None, cache_file=None, persistence=1):
         """Build (or load from cache) the molecular frame index.
 
         If *cache_file* exists and was produced with the same parameters,
@@ -360,11 +427,21 @@ class ChempilerTrajectory:
             Truncate the trajectory to this many frames.
         cache_file : str, optional
             Path to an HDF5 cache file. Read on hit, written on miss.
+        persistence : int
+            Minimum number of consecutive frames a molecular assignment must
+            persist to be accepted. Assignments that appear for fewer than
+            this many frames — surrounded on both sides by the same previous
+            assignment — are reverted. Default ``1`` (no filtering). A value
+            of ``3`` eliminates most vibrational artefacts (e.g. H4O2 dimers
+            from O–H stretch crossings in pure water) without suppressing real
+            proton-transfer events that last tens of frames.
         """
         if cache_file:
             try:
                 self.frames = load_cache(cache_file)
                 print(f"[Chempiler] loaded cache → {cache_file}")
+                if persistence > 1:
+                    _apply_persistence(self.frames, persistence)
                 return
             except Exception as e:
                 print(f"[Chempiler] cache miss → rebuilding ({e})")
@@ -424,6 +501,9 @@ class ChempilerTrajectory:
 
         print(f"[Chempiler] built {len(self.frames)} frames")
 
+        if persistence > 1:
+            _apply_persistence(self.frames, persistence)
+
         if cache_file:
             key = make_cache_key(
                 self.filename,
@@ -432,6 +512,7 @@ class ChempilerTrajectory:
                 self.coordination_scale,
                 max_frames,
                 self.sphere_cutoffs,
+                persistence,
             )
             save_cache(
                 cache_file,
@@ -521,7 +602,8 @@ class ChempilerTrajectory:
         from .rdf import rdf
         return rdf(self.frames, *args, **kwargs)
 
-    def msd(self, formula, max_lag=None, correlation_time=None, buffer=5):
+    def msd(self, formula, max_lag=None, correlation_time=None, buffer=5,
+            block_size=None, n_blocks=None, dt=None):
         """Compute the mean squared displacement for a molecular species.
 
         Molecules are tracked within their lifetime segments using minimum-image
@@ -553,7 +635,8 @@ class ChempilerTrajectory:
         """
         from .msd import msd
         return msd(self.frames, formula, max_lag=max_lag,
-                   correlation_time=correlation_time, buffer=buffer)
+                   correlation_time=correlation_time, buffer=buffer,
+                   block_size=block_size, n_blocks=n_blocks, dt=dt)
 
     def extract_segments(self, formula, output_dir='.', vacuum=False,
                          center=False, center_instance=0, center_on=None):

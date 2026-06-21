@@ -331,8 +331,8 @@ def _draw_cluster_2d(ax, atoms, margin=0.3, view=2, view_range=None):
 
 
 def plot_rdf(r, g, insets=None, ax=None,
-             inset_w=0.13, inset_h=0.38, inset_y=0.75, inset_margin=0.2,
-             atomic_scale=None, figsize=(10, 5), **line_kw):
+             inset_w=0.325, inset_h=0.95, inset_y=0.75, inset_margin=0.2,
+             atomic_scale=1.0, figsize=(10, 5), **line_kw):
     """Plot g(r) and optionally add per-peak structure insets.
 
     Parameters

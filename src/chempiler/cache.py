@@ -24,7 +24,7 @@ CACHE_VERSION = 1
 
 
 def make_cache_key(filename, mode, covalent_scale, coordination_scale,
-                   max_frames, sphere_cutoffs=None):
+                   max_frames, sphere_cutoffs=None, persistence=1):
     """Return a SHA-256 hex digest identifying a specific build configuration.
 
     Parameters
@@ -51,6 +51,7 @@ def make_cache_key(filename, mode, covalent_scale, coordination_scale,
         "covalent_scale": covalent_scale,
         "coordination_scale": coordination_scale,
         "max_frames": max_frames,
+        "persistence": persistence,
         "version": CACHE_VERSION,
     }
     if sphere_cutoffs:
