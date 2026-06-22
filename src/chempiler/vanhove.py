@@ -1,11 +1,14 @@
 """Van Hove self-correlation function G_s(r, τ) for molecular species."""
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 from .msd import _track_segment
 from .segmentation import lifetime_segments
 
 
 def van_hove(frames, formula, lags=(1, 10, 50, 200), rmax=None, dr=0.1,
-             return_peaks=False, return_n=False):
+             return_peaks=False, return_n=False,
+             kde=False, kde_bandwidth=None,
+             stitch=False, stitch_max_gap=50, stitch_max_jump=4.0):
     """Self part of the Van Hove correlation function.
 
     G_s(r, τ) is the probability density of finding a molecule at distance r
@@ -25,6 +28,28 @@ def van_hove(frames, formula, lags=(1, 10, 50, 200), rmax=None, dr=0.1,
         not cut off for any of the requested lags.
     dr : float
         Bin width in Å.
+    kde : bool
+        If True, smooth each p(r) with a Gaussian kernel after histogramming.
+        This is equivalent to kernel density estimation on a regular grid and
+        suppresses spurious shoulders from Poisson bin noise.  Default False
+        (raw histogram).
+    kde_bandwidth : float or None
+        Gaussian kernel standard deviation in Å.  Used only when *kde=True*.
+        If None (default), Scott's rule is applied per lag:
+        h = 1.06 × σ × N⁻¹/⁵, where σ is the standard deviation of the
+        displacements and N is the number of samples.  A fixed value (e.g.
+        ``kde_bandwidth=0.15``) applies the same width at all lags, which is
+        useful for heatmaps where visual consistency across lags matters.
+    stitch : bool
+        If True, chain lifetime segments across proton-transfer hops using
+        :func:`~chempiler.segmentation.stitch_identity_tracks` before
+        computing displacements.  This makes the Grotthuss jump distance
+        (~2.8 Å) visible as a shoulder at short lags in the HO van Hove.
+        Default False (standard per-segment tracking).
+    stitch_max_gap : int
+        Passed to ``stitch_identity_tracks`` as *max_gap*.  Default 2.
+    stitch_max_jump : float
+        Passed to ``stitch_identity_tracks`` as *max_jump* (Å).  Default 4.0.
 
     Returns
     -------
@@ -51,13 +76,22 @@ def van_hove(frames, formula, lags=(1, 10, 50, 200), rmax=None, dr=0.1,
     r_peaks : numpy.ndarray, shape (len(lags),)  — only if return_peaks=True
     n_origins : numpy.ndarray, shape (len(lags),) — only if return_n=True
     """
-    segs = lifetime_segments(frames, formula)
-    if not segs:
-        raise ValueError(f"{formula!r} not found in any frame.")
-
-    all_tracks = []
-    for s, e in segs:
-        all_tracks.extend(_track_segment(frames, formula, s, e))
+    if stitch:
+        from .segmentation import stitch_identity_tracks
+        all_tracks, _ = stitch_identity_tracks(
+            frames, formula,
+            max_gap=stitch_max_gap,
+            max_jump=stitch_max_jump,
+        )
+        if not all_tracks:
+            raise ValueError(f"{formula!r} not found in any frame.")
+    else:
+        segs = lifetime_segments(frames, formula)
+        if not segs:
+            raise ValueError(f"{formula!r} not found in any frame.")
+        all_tracks = []
+        for s, e in segs:
+            all_tracks.extend(_track_segment(frames, formula, s, e))
 
     lags = list(lags)
     max_lag = max(lags)
@@ -86,17 +120,28 @@ def van_hove(frames, formula, lags=(1, 10, 50, 200), rmax=None, dr=0.1,
             disps.extend(d.tolist())
 
         if disps:
-            counts, _ = np.histogram(disps, bins=edges)
+            disps_arr = np.asarray(disps)
+            counts, _ = np.histogram(disps_arr, bins=edges)
             n_binned  = counts.sum()
             n_origins[li] = n_binned
             if n_binned > 0:
                 # p(r) = counts / (n × dr): radial probability, no 1/r² factor
-                p[li] = counts / (n_binned * dr)
+                p_raw = counts / (n_binned * dr)
+                if kde:
+                    if kde_bandwidth is None:
+                        # Scott's rule: h = 1.06 σ N^{-1/5}
+                        h = 1.06 * disps_arr.std() * len(disps_arr) ** (-0.2)
+                    else:
+                        h = float(kde_bandwidth)
+                    sigma_bins = max(h / dr, 0.5)
+                    smoothed   = gaussian_filter1d(p_raw, sigma=sigma_bins)
+                    total      = smoothed.sum() * dr
+                    p[li]      = smoothed / total if total > 0 else smoothed
+                else:
+                    p[li] = p_raw
 
     out = (r, p)
     if return_peaks:
-        from scipy.ndimage import gaussian_filter1d
-
         def _peak(curve):
             s = gaussian_filter1d(curve, sigma=2)
             k = int(np.argmax(s))
