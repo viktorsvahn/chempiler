@@ -244,3 +244,16 @@ def van_hove_heatmap(r, p, lags, ax=None, cmap="viridis", normalize_rows=True,
     ax.set_xlabel("r (Å)")
     ax.set_ylabel("lag")
     return ax
+
+
+# ---------------------------------------------------------------------------
+# Axes extension
+# ---------------------------------------------------------------------------
+import matplotlib.axes as _mpl_axes
+
+
+def _ax_van_hove_heatmap(self, r, p, lags, **kwargs):
+    return van_hove_heatmap(r, p, lags, ax=self, **kwargs)
+
+
+_mpl_axes.Axes.van_hove_heatmap = _ax_van_hove_heatmap

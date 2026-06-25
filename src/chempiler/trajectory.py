@@ -413,7 +413,8 @@ class ChempilerTrajectory:
         self.sphere_cutoffs = sphere_cutoffs  # None → auto-detect at build time
         self.frames = []
 
-    def build(self, max_frames=None, cache_file=None, persistence=1):
+    def build(self, max_frames=None, cache_file=None, persistence=1,
+              companion=None):
         """Build (or load from cache) the molecular frame index.
 
         If *cache_file* exists and was produced with the same parameters,
@@ -435,6 +436,12 @@ class ChempilerTrajectory:
             of ``3`` eliminates most vibrational artefacts (e.g. H4O2 dimers
             from O–H stretch crossings in pure water) without suppressing real
             proton-transfer events that last tens of frames.
+        companion : str, optional
+            Path to an HDF5 companion file written by
+            :class:`~chempiler.CalcResultsWriter`.  Per-atom data (shape
+            ``(N,)`` or ``(N, ...)``) is attached to ``frame.atoms.arrays``;
+            scalar and global-vector data goes to ``frame.atoms.info``.
+            Frame *i* in the companion is matched to ``self.frames[i]``.
         """
         if cache_file:
             try:
@@ -523,6 +530,41 @@ class ChempilerTrajectory:
                 self.coordination_scale,
             )
             print(f"[Chempiler] cache written → {cache_file}")
+
+        if companion is not None:
+            self._attach_companion(companion)
+
+    def _attach_companion(self, path):
+        """Attach per-frame calculator data from an HDF5 companion file.
+
+        Per-atom arrays (first dimension == number of atoms) are written to
+        ``frame.atoms.arrays``; everything else goes to ``frame.atoms.info``.
+        """
+        import h5py
+        with h5py.File(path, 'r') as hf:
+            n_hdf = int(hf.attrs.get('n_frames', 0))
+            n = min(len(self.frames), n_hdf)
+            if n < len(self.frames):
+                print(
+                    f"[Chempiler] companion has {n_hdf} frames, "
+                    f"trajectory has {len(self.frames)} — attaching first {n}"
+                )
+            keys = list(hf.keys())
+            for key in keys:
+                arr = hf[key][:n]           # shape (n, ...)
+                for fi in range(n):
+                    val = arr[fi]
+                    frame = self.frames[fi]
+                    if val.ndim >= 1 and val.shape[0] == len(frame.atoms):
+                        frame.atoms.arrays[key] = val
+                    elif val.ndim == 0:
+                        frame.atoms.info[key] = float(val)
+                    else:
+                        frame.atoms.info[key] = val
+        print(
+            f"[Chempiler] companion attached → {path} "
+            f"({n} frames, {len(keys)} properties: {', '.join(keys)})"
+        )
 
     def summary(self):
         """Return a frequency count of molecular formulas across all frames.
@@ -999,7 +1041,9 @@ class ChempilerTrajectory:
     def rdf_peak_environments(self, center, target, rdf,
                                n_per_peak=3,
                                peak_min_g=0.5, peak_dr=0.12, stride=20,
-                               smooth_sigma=0.0):
+                               smooth_sigma=0.0,
+                               cumulative=False,
+                               max_neighbors=None):
         """Extract representative local clusters at each peak of a pre-computed RDF.
 
         Detects peaks in the supplied g(r), then for each peak finds frames
@@ -1028,6 +1072,13 @@ class ChempilerTrajectory:
             Standard deviation in Å of a Gaussian applied to g(r) before peak
             detection.  Increase to suppress noise peaks; ``0`` disables
             smoothing (default).
+        cumulative : bool
+            If False (default), each cluster contains only molecules in shell i
+            (annular).  If True, shells 0..i are all included so that each
+            successive inset is a superset of the previous one.
+        max_neighbors : int or None
+            If set, keep only the *max_neighbors* closest target molecules
+            within the selected shell(s).  ``None`` keeps all (default).
 
         Returns
         -------
@@ -1075,8 +1126,17 @@ class ChempilerTrajectory:
                 if 0 <= idx < len(shells.peaks):
                     mol_shells.setdefault(idx, []).append(mol_idx)
 
+            shell_range = range(max_shell + 1) if cumulative else [max_shell]
+            candidates = []
+            for shell_i in shell_range:
+                for mol_idx in mol_shells.get(shell_i, []):
+                    candidates.append((mol_nearest_d[mol_idx], mol_idx))
+            candidates.sort()
+            if max_neighbors is not None:
+                candidates = candidates[:max_neighbors]
+
             mol_set = {center_mol}
-            for mol_idx in mol_shells.get(max_shell, []):
+            for _, mol_idx in candidates:
                 mol_set.add(mol_idx)
 
             keep = sorted({a for mi in mol_set for a in frame.molecules[mi]})

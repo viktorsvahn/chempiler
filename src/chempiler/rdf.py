@@ -268,19 +268,7 @@ class ShellEnvironments(dict):
 # Plotting
 # ---------------------------------------------------------------------------
 
-# Jmol hue semantics (element recognisability) with Paul Tol's perceptually
-# uniform, colourblind-safe values (https://personal.sron.nl/~pault/).
-# Orange for P is borrowed from Tol vibrant — Tol bright has no orange.
-_ELEM_COLOR = {
-    'H':  '#BBBBBB',  # Tol grey   (Jmol: white — invisible on white bg)
-    'C':  '#555555',  # dark grey  (Jmol: #909090 — darkened for contrast)
-    'N':  '#4477AA',  # Tol blue
-    'O':  '#EE6677',  # Tol red
-    'F':  '#66CCEE',  # Tol cyan   (distinct from Cl green)
-    'S':  '#CCBB44',  # Tol yellow (Jmol: bright yellow — weak on white bg)
-    'Cl': '#228833',  # Tol green
-    'P':  '#EE7733',  # Tol vibrant orange
-}
+from .colours import elem_color as _elem_color, elem_radius as _elem_radius
 
 
 def _parse_fspec(fspec):
@@ -295,8 +283,7 @@ def _parse_fspec(fspec):
 
 
 def _draw_cluster_2d(ax, atoms, margin=0.3, view=2, view_range=None):
-    from ase.data import covalent_radii, atomic_numbers
-    from matplotlib.patches import Circle
+    from .colours import draw_atom_2d
     pos = atoms.get_positions()
     syms = atoms.get_chemical_symbols()
     ci = atoms.info.get('center_atom', 0)
@@ -308,16 +295,10 @@ def _draw_cluster_2d(ax, atoms, margin=0.3, view=2, view_range=None):
     xy = pos @ Vt[plane].T
     xy -= xy[ci]   # shift so center atom sits at (0, 0)
 
-    radii = np.array([covalent_radii[atomic_numbers[s]] for s in syms])
+    radii = np.array([_elem_radius(s) for s in syms])
 
     for k, sym in enumerate(syms):
-        r = radii[k]
-        ax.add_patch(Circle(xy[k], radius=r,
-                            color=_ELEM_COLOR.get(sym, '#BBBBBB'),
-                            ec='#111', lw=0.65, zorder=2))
-        ax.add_patch(Circle((xy[k][0] - 0.3 * r, xy[k][1] + 0.3 * r),
-                            radius=0.18 * r,
-                            color='white', alpha=0.6, lw=0, zorder=3))
+        draw_atom_2d(ax, float(xy[k, 0]), float(xy[k, 1]), sym)
 
     if view_range is None:
         half = float(np.abs(xy).max() + radii.max())
@@ -434,3 +415,16 @@ def plot_rdf(r, g, insets=None, ax=None,
                 patch.set_clip_on(False)
 
     return ax
+
+
+# ---------------------------------------------------------------------------
+# Axes extension
+# ---------------------------------------------------------------------------
+import matplotlib.axes as _mpl_axes
+
+
+def _ax_plot_rdf(self, r, g, **kwargs):
+    return plot_rdf(r, g, ax=self, **kwargs)
+
+
+_mpl_axes.Axes.plot_rdf = _ax_plot_rdf
