@@ -51,12 +51,12 @@ def elem_radius(symbol):
 # ---------------------------------------------------------------------------
 # Atom drawing
 # ---------------------------------------------------------------------------
-def draw_atom_2d(ax, x, y, symbol, scale=1.0, zorder_base=2):
+def draw_atom_2d(ax, x, y, symbol, scale=1.0, zorder_base=2, highlight_dir=(-0.3, 0.3)):
     """Draw a single atom as a shaded circle on *ax*.
 
     The circle uses the Tol-ified Jmol colour with a dark outline and a small
-    white specular highlight offset to the upper-left — matching the style used
-    in :func:`chempiler.rdf.plot_rdf` insets.
+    white specular highlight offset to the upper-left by default — matching
+    the style used in :func:`chempiler.rdf.plot_rdf` insets.
 
     Parameters
     ----------
@@ -69,18 +69,24 @@ def draw_atom_2d(ax, x, y, symbol, scale=1.0, zorder_base=2):
         Multiplier applied to the covalent radius.
     zorder_base : int
         z-order for the atom body; the highlight is drawn at ``zorder_base + 1``.
+    highlight_dir : tuple of float
+        ``(dx, dy)`` direction of the highlight offset, in units of the atom
+        radius.  Default ``(-0.3, 0.3)`` is upper-left; callers whose atom
+        sits near an axes boundary can flip a component to keep the
+        highlight from being clipped off.
     """
     from matplotlib.patches import Circle
 
     r = elem_radius(symbol) * scale
     fc = elem_color(symbol)
+    hdx, hdy = highlight_dir
 
     ax.add_patch(Circle(
         (x, y), radius=r,
         color=fc, ec='#111111', lw=0.65, zorder=zorder_base,
     ))
     ax.add_patch(Circle(
-        (x - 0.3 * r, y + 0.3 * r), radius=0.18 * r,
+        (x + hdx * r, y + hdy * r), radius=0.18 * r,
         color='white', alpha=0.6, lw=0, zorder=zorder_base + 1,
     ))
 

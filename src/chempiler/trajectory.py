@@ -449,9 +449,12 @@ class ChempilerTrajectory:
                 print(f"[Chempiler] loaded cache → {cache_file}")
                 if persistence > 1:
                     _apply_persistence(self.frames, persistence)
-                return
             except Exception as e:
                 print(f"[Chempiler] cache miss → rebuilding ({e})")
+            else:
+                if companion is not None:
+                    self._attach_companion(companion)
+                return
 
         traj = read(self.filename, index=":")
         if max_frames is not None:

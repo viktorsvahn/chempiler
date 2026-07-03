@@ -87,6 +87,9 @@ def resolve(frame, selector):
     ValueError
         If the selector type is not recognised.
     """
+    if selector is None:
+        return atoms(frame, symbol=None)   # all atoms
+
     if isinstance(selector, str):
         return atoms(frame, selector)
 
