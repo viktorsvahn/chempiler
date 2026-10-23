@@ -106,6 +106,18 @@ def save_cache(path, frames, key, mode, covalent_scale, coordination_scale):
             g.create_dataset("atoms", data=np.void(buf.read()))
 
 
+def cache_n_frames(path):
+    """Number of frames in a cache file, without loading them.
+
+    Raises
+    ------
+    OSError, KeyError
+        If the file does not exist or is not a frame cache.
+    """
+    with h5py.File(path, "r") as h5:
+        return len(h5["frames"])
+
+
 def load_cache(path):
     """Load frames from an HDF5 cache file.
 

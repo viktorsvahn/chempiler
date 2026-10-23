@@ -137,6 +137,7 @@ def spatial_density_map(
     stride=1,
     weights=None,
     exclude_align=True,
+    cache_file=None,
 ):
     """Accumulate a 2D spatial density map of *target* atoms around *center*.
 
@@ -182,6 +183,14 @@ def spatial_density_map(
         SDF).  Each bin accumulates the *sum of weights* of atoms falling in
         it rather than a count.  The companion HDF5 must be attached first via
         ``traj.build(companion=...)``.
+    cache_file : str or Path, optional
+        Path to an HDF5 (``.h5``) file. If it exists, ``hist``/``xedges``/
+        ``yedges``/``meta`` are loaded from it directly instead of
+        recomputing. If it doesn't, this call's result is computed as
+        usual and then saved there. The exact call parameters are stored
+        alongside the data and checked on load -- a cache computed with a
+        different center/align_to/target/projection/rmax/bins/... raises
+        rather than silently returning the wrong map.
 
     Returns
     -------
@@ -197,6 +206,37 @@ def spatial_density_map(
     meta : dict
         ``'n_center'``, ``'mean_bond_len'``, ``'projection'``, ``'half_space'``.
     """
+    param_key = None
+    if cache_file is not None:
+        import h5py
+        import json
+        from pathlib import Path
+
+        param_key = repr(sorted({
+            'center': center, 'align_to': align_to, 'target': target,
+            'projection': projection, 'half_space': half_space,
+            'half_space_offset': half_space_offset, 'rmax': rmax,
+            'bins': bins, 'stride': stride, 'weights': weights,
+            'exclude_align': exclude_align,
+        }.items()))
+        path = Path(cache_file)
+        if path.exists():
+            with h5py.File(path, 'r') as hf:
+                if hf.attrs['param_key'] != param_key:
+                    raise ValueError(
+                        f"{cache_file} was computed with different "
+                        f"spatial_density_map() parameters than this call "
+                        f"-- delete it, or use a different cache_file, if "
+                        f"you changed any argument.\n"
+                        f"  cached: {hf.attrs['param_key']}\n  now:    {param_key}"
+                    )
+                hist = hf['hist'][:]
+                xedges = hf['xedges'][:]
+                yedges = hf['yedges'][:]
+                meta = json.loads(hf.attrs['meta_json'])
+            print(f"[Chempiler] loaded SDF cache → {cache_file}")
+            return hist, xedges, yedges, meta
+
     if projection not in _ALL_PROJ:
         raise ValueError(f"projection must be one of {sorted(_ALL_PROJ)}")
 
@@ -214,6 +254,9 @@ def spatial_density_map(
     hist = np.zeros((bins, bins), dtype=np.float64)
     bond_lens = []
     n_center = 0
+    total_target_count = 0
+    total_volume = 0.0
+    n_density_frames = 0
 
     for frame in frames[::stride]:
         c_idx = resolve(frame, center)
@@ -222,6 +265,17 @@ def spatial_density_map(
 
         if len(c_idx) == 0 or len(a_idx) == 0 or len(t_idx) == 0:
             continue
+
+        # Bulk (ideal-gas) number density of the target species, as a
+        # byproduct of the frames already being iterated -- one target
+        # count and one cell volume per frame, independent of how many
+        # centre atoms/molecules this frame happens to have. Used as the
+        # default plot_sdf(density_reference=...) so a bulk-relative SDF
+        # plot doesn't need a separate trajectory load to compute it --
+        # see meta['density_reference'] below.
+        total_target_count += len(t_idx)
+        total_volume += float(frame.atoms.get_volume())
+        n_density_frames += 1
 
         pos  = frame.positions
         cell = np.asarray(frame.atoms.get_cell())
@@ -288,12 +342,28 @@ def spatial_density_map(
             hist += h
             n_center += 1
 
-    return hist, xedges, yedges, {
+    meta = {
         'n_center':      n_center,
         'mean_bond_len': float(np.mean(bond_lens)) if bond_lens else 0.,
         'projection':    projection,
         'half_space':    half_space,
+        'density_reference': (total_target_count / total_volume
+                              if total_volume > 0 else None),
     }
+
+    if cache_file is not None:
+        import h5py
+        import json
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(path, 'w') as hf:
+            hf.create_dataset('hist', data=hist, compression='gzip')
+            hf.create_dataset('xedges', data=xedges)
+            hf.create_dataset('yedges', data=yedges)
+            hf.attrs['meta_json'] = json.dumps(meta)
+            hf.attrs['param_key'] = param_key
+        print(f"[Chempiler] saved SDF cache → {cache_file}")
+
+    return hist, xedges, yedges, meta
 
 
 def _sym_edges(proj, folds, rmax, bins):
@@ -430,6 +500,7 @@ def spatial_density_maps(
     weights=None,
     exclude_align=True,
     bisector=None,
+    cache_file=None,
 ):
     """Accumulate all symmetry-inequivalent SDFs for a Schoenflies point group.
 
@@ -455,7 +526,48 @@ def spatial_density_maps(
         xz panel and y ≥ 0 in the yz panel).
     meta : dict
         ``'n_center'``, ``'mean_bond_len'``, ``'symmetry'``, ``'half_space'``.
+    cache_file : str or Path, optional
+        Path to an HDF5 (``.h5``) file. If it exists, ``hists``/``meta``
+        are loaded from it directly instead of recomputing. If it doesn't,
+        this call's result is computed as usual and then saved there. The
+        exact call parameters are stored alongside the data and checked
+        on load -- a cache computed with different center/align_to/
+        target/symmetry/rmax/bins/... raises rather than silently
+        returning the wrong maps.
     """
+    param_key = None
+    if cache_file is not None:
+        import h5py
+        import json
+        from pathlib import Path
+
+        param_key = repr(sorted({
+            'center': center, 'align_to': align_to, 'target': target,
+            'symmetry': symmetry, 'secondary': secondary,
+            'half_space': half_space, 'half_space_offset': half_space_offset,
+            'rmax': rmax, 'bins': bins, 'stride': stride,
+            'weights': weights, 'exclude_align': exclude_align,
+            'bisector': bisector,
+        }.items()))
+        path = Path(cache_file)
+        if path.exists():
+            with h5py.File(path, 'r') as hf:
+                if hf.attrs['param_key'] != param_key:
+                    raise ValueError(
+                        f"{cache_file} was computed with different "
+                        f"spatial_density_maps() parameters than this call "
+                        f"-- delete it, or use a different cache_file, if "
+                        f"you changed any argument.\n"
+                        f"  cached: {hf.attrs['param_key']}\n  now:    {param_key}"
+                    )
+                hists = {}
+                for proj in hf['hists']:
+                    g = hf['hists'][proj]
+                    hists[proj] = (g['hist'][:], g['xedges'][:], g['yedges'][:])
+                meta = json.loads(hf.attrs['meta_json'])
+            print(f"[Chempiler] loaded SDF cache → {cache_file}")
+            return hists, meta
+
     if symmetry not in SCHOENFLIES:
         raise ValueError(
             f"symmetry must be one of {sorted(SCHOENFLIES)}. Got {symmetry!r}."
@@ -478,6 +590,8 @@ def spatial_density_maps(
     hists = {p: np.zeros((bins, bins), dtype=np.float64) for p in projections}
     bond_lens = []
     n_center  = 0
+    total_target_count = 0
+    total_volume = 0.0
 
     for frame in frames[::stride]:
         c_idx = resolve(frame, center)
@@ -487,6 +601,12 @@ def spatial_density_maps(
 
         if len(c_idx) == 0 or len(a_idx) == 0 or len(t_idx) == 0:
             continue
+
+        # Bulk (ideal-gas) number density of the target species -- see the
+        # matching comment in spatial_density_map for why this is tracked
+        # here rather than requiring a separate trajectory load.
+        total_target_count += len(t_idx)
+        total_volume += float(frame.atoms.get_volume())
 
         pos   = frame.positions
         cell  = np.asarray(frame.atoms.get_cell())
@@ -579,8 +699,249 @@ def spatial_density_maps(
         'mean_bond_len': float(np.mean(bond_lens)) if bond_lens else 0.,
         'symmetry':      symmetry,
         'half_space':    half_space,
+        'density_reference': (total_target_count / total_volume
+                              if total_volume > 0 else None),
     }
-    return {p: (hists[p], *edges[p]) for p in projections}, meta
+    result = {p: (hists[p], *edges[p]) for p in projections}
+
+    if cache_file is not None:
+        import h5py
+        import json
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(path, 'w') as hf:
+            grp = hf.create_group('hists')
+            for proj, (h, xe, ye) in result.items():
+                g = grp.create_group(proj)
+                g.create_dataset('hist', data=h, compression='gzip')
+                g.create_dataset('xedges', data=xe)
+                g.create_dataset('yedges', data=ye)
+            hf.attrs['meta_json'] = json.dumps(meta)
+            hf.attrs['param_key'] = param_key
+        print(f"[Chempiler] saved SDF cache → {cache_file}")
+
+    return result, meta
+
+
+def sdf_radial_profile(hist, xedges=None, yedges=None, meta=None,
+                       n_center=None, density_reference=None):
+    """Collapse a spatial density map's ``'spherical'`` projection to g(R), n(R).
+
+    Reading a characteristic distance straight off the peak pixel of a
+    bulk-normalised (r⊥, z) or (r, θ) SDF map is unreliable near the
+    symmetry axis: ``plot_sdf``'s ``normalize='density'`` divides by a
+    volume element that shrinks to zero there (``2π·r⊥·Δr·Δz`` or
+    ``2π·r²·sinθ·Δr·Δθ``), so a bin with very few raw counts can still
+    show the highest ρ/ρ_bulk ratio on the map even though a much more
+    populated (but wider-volume, off-axis) region is the actual dominant
+    feature. Collapsing the angular axis of the *raw* histogram counts
+    into spherical shells sidesteps that entirely -- each r-shell's count
+    is divided by its true ``4/3·π·(r_out³-r_in³)`` volume, giving a
+    proper isotropic g(R) with no coordinate-singularity bias, in the
+    same ``(r, g, n)`` convention :func:`rdf` returns. Feed the result
+    straight into :func:`rdf_shells` to get not just peak positions but
+    their trough-bounded distance *ranges* (``ShellInfo.troughs``) --
+    including fainter, lower-g features (e.g. a weak second-shell ring)
+    that a single peak-position readout would miss.
+
+    Parameters
+    ----------
+    hist : tuple or array-like
+        Either the ``(hists_dict, meta)`` tuple returned by
+        :func:`spatial_density_maps` (``hists_dict`` must contain a
+        ``'spherical'`` entry -- i.e. the symmetry group passed to
+        :func:`spatial_density_maps` must include it, e.g. ``'Cinfv'``),
+        or the raw ``(r, θ)`` 2D histogram array from that projection.
+    xedges, yedges : array-like, optional
+        Bin edges for the raw-array form. Ignored for the tuple form.
+    meta : dict, optional
+        Overrides the tuple form's own meta (mainly for passing meta
+        alongside the raw-array form).
+    n_center, density_reference : float, optional
+        Override the values tracked in *meta*. *density_reference* is
+        required one way or the other -- see :func:`spatial_density_maps`.
+
+    Returns
+    -------
+    r : numpy.ndarray
+        Shell-centre distances (Å).
+    g : numpy.ndarray
+        ρ(R)/ρ_bulk, isotropic (no axis bias).
+    n : numpy.ndarray
+        Cumulative coordination number at R.
+    """
+    _meta = {}
+    if (isinstance(hist, tuple) and len(hist) == 2
+            and isinstance(hist[0], dict) and xedges is None):
+        hists_dict, _meta = hist
+        if 'spherical' not in hists_dict:
+            raise ValueError(
+                "sdf_radial_profile needs the 'spherical' projection -- "
+                "call spatial_density_maps(..., symmetry=...) with a "
+                "symmetry group whose SCHOENFLIES entry includes it "
+                "(e.g. 'Cinfv', 'Dinfh', 'C2v', 'C3v', 'Td', 'Oh')."
+            )
+        hist, xedges, yedges = hists_dict['spherical']
+    elif isinstance(hist, tuple) and len(hist) == 3 and xedges is None:
+        hist, xedges, yedges = hist
+
+    if meta is not None:
+        _meta = meta
+
+    if n_center is None:
+        n_center = _meta.get('n_center', 1)
+    if density_reference is None:
+        density_reference = _meta.get('density_reference')
+    if density_reference is None:
+        raise ValueError(
+            "density_reference is required -- pass it explicitly, or via "
+            "meta from spatial_density_map(s), which tracks it "
+            "automatically as it iterates frames."
+        )
+
+    hist = np.asarray(hist, dtype=float)
+    r_edges = np.asarray(xedges, dtype=float)   # spherical: axis-0 = r
+    r  = 0.5 * (r_edges[:-1] + r_edges[1:])
+    dr = float(r_edges[1] - r_edges[0])
+    shell_volume = 4.0 * np.pi * r ** 2 * dr
+
+    shell_counts = hist.sum(axis=1)             # collapse θ -- full-shell counts
+    nc = float(max(n_center, 1))
+
+    g = shell_counts / (nc * shell_volume * float(density_reference))
+    n = np.cumsum(shell_counts) / nc
+    return r, g, n
+
+
+def sdf_region_membership(frames, center, align_to, target, regions,
+                          bisector=False, exclude_align=True, stride=1):
+    """Classify *target* atoms by which SDF region they occupy, per frame.
+
+    Rank-based neighbour tracking (e.g. "1st-nearest", "4th-nearest", as
+    from :meth:`ChempilerTrajectory.nearest_distances`) is not a stable
+    geometric identity: which physical molecule holds a given rank
+    changes with the exchange dynamics, and a shell with several
+    simultaneous occupants (see the cumulative CN from
+    :func:`sdf_radial_profile` + :func:`rdf_shells`) has no single
+    "4th-nearest" identity to begin with -- rank 4 is just whichever
+    molecule happens to be 4th closest that frame, out of however many
+    actually populate the shell. Trying to instead follow one physical
+    *atom*'s index across frames doesn't work either, for the opposite
+    reason: which atom occupies a given site changes as molecules
+    exchange in and out of it.
+
+    This sidesteps both: it re-applies the exact centre/align_to
+    alignment :func:`spatial_density_maps` uses to build the SDF (centre
+    at the origin, the align_to bond along +z), and classifies every
+    target atom, every frame, by which of the supplied geometric
+    *regions* -- boxes in (R, θ) relative to that bond axis -- it falls
+    into. A region is a place in the aligned frame, not a rank or an
+    atom identity, so "is anything in this region right now" survives
+    both molecules swapping through it and index churn.
+
+    Parameters
+    ----------
+    frames : list of Frame
+    center : str or dict
+        Selector for the single reference atom (must resolve to exactly
+        one atom per frame, as with :meth:`nearest_distances`).
+    align_to : str or dict
+        Selector for the bond atom(s) fixing the alignment axis (e.g.
+        the radical's own H). Multiple matches within the centre's
+        molecule are averaged when *bisector* is True, else the first
+        match is used -- matching :func:`spatial_density_maps`.
+    target : str or dict
+        Selector for candidate atoms to classify.
+    regions : dict of str -> (tuple, tuple or None)
+        ``{name: ((r_min, r_max), (theta_min, theta_max))}``, distance in
+        Å and theta in degrees from the align_to bond axis (0-180°).
+        Use ``theta_range=None`` for "any angle" -- a pure radial shell,
+        e.g. straight from :func:`rdf_shells`' ``ShellInfo.troughs``.
+        Narrowing theta is what distinguishes a genuine single-partner
+        site (e.g. a linear H-bond along the axis) from a broader,
+        multiply-occupied ring at a similar R but spread over angle.
+    bisector : bool
+        Average all align_to matches to fix a C2-type axis instead of
+        using a single bond -- see :func:`spatial_density_maps`.
+    exclude_align : bool
+        Exclude the align_to atom itself from target candidates.
+    stride : int
+
+    Returns
+    -------
+    dict of str -> numpy.ndarray, shape (n_processed_frames,)
+        For each region name, the centre-to-occupant distance (Å) of the
+        *nearest* target atom found inside that region that frame, or
+        NaN if unoccupied. A region built from a singly-occupied shell
+        (cumulative CN ≈ 1) will essentially always report 0 or 1
+        candidate; for a multiply-occupied region this reports the
+        closest one, analogous to ``nearest_distances``' nn1.
+    """
+    import numpy as np
+    from ase.geometry import find_mic
+    from .selectors import resolve
+
+    out = {name: [] for name in regions}
+
+    for frame in frames[::stride]:
+        c_idx = resolve(frame, center)
+        a_idx = resolve(frame, align_to)
+        t_idx = resolve(frame, target)
+        if len(c_idx) != 1:
+            raise ValueError(
+                f"center selector must resolve to exactly one atom, got "
+                f"{len(c_idx)}. Use a more specific selector."
+            )
+        if len(a_idx) == 0 or len(t_idx) == 0:
+            for name in regions:
+                out[name].append(np.nan)
+            continue
+
+        pos   = frame.positions
+        cell  = np.asarray(frame.atoms.get_cell())
+        ci    = int(c_idx[0])
+        a_set = set(a_idx.tolist())
+
+        mol_id    = int(frame.atom_to_mol[ci])
+        mol_atoms = frame.molecules[mol_id]
+        a_in_mol  = [a for a in mol_atoms if a in a_set]
+        if not a_in_mol:
+            for name in regions:
+                out[name].append(np.nan)
+            continue
+
+        if bisector:
+            diffs = []
+            for a in a_in_mol:
+                bd_a, _ = find_mic((pos[a] - pos[ci])[None], cell, pbc=True)
+                diffs.append(bd_a[0])
+            R_mat = _bond_rotation(np.mean(diffs, axis=0))
+            ai = None
+        else:
+            ai = a_in_mol[0]
+            bd, _ = find_mic((pos[ai] - pos[ci])[None], cell, pbc=True)
+            R_mat = _bond_rotation(bd[0])
+
+        diff   = pos[t_idx] - pos[ci]
+        mic, _ = find_mic(diff, cell, pbc=True)
+        if bisector:
+            excl = (t_idx == ci) | np.isin(t_idx, a_in_mol)
+        else:
+            excl = (t_idx == ci) | ((t_idx == ai) if exclude_align else False)
+        active = ~excl
+
+        dist  = np.linalg.norm(mic[active], axis=1)
+        rot_z = (R_mat @ mic[active].T).T[:, 2]
+        theta = np.degrees(np.arccos(np.clip(rot_z / np.maximum(dist, 1e-10), -1.0, 1.0)))
+
+        for name, (r_range, theta_range) in regions.items():
+            r_lo, r_hi = r_range
+            mask = (dist >= r_lo) & (dist < r_hi)
+            if theta_range is not None:
+                th_lo, th_hi = theta_range
+                mask &= (theta >= th_lo) & (theta < th_hi)
+            out[name].append(float(dist[mask].min()) if mask.any() else np.nan)
+
+    return {name: np.array(v) for name, v in out.items()}
 
 
 def molecule_overlay(center_symbol, align_symbol, bond_len, projection='xz',
@@ -714,6 +1075,7 @@ def plot_sdf(
     symmetric=False,
     vcenter=None,
     normalize='density',
+    density_reference=None,
     molecule=None,
     mol_scale=1.0,
     orientation='portrait',
@@ -756,8 +1118,13 @@ def plot_sdf(
         ``'contourf+contour'``  — smooth fill with white level curves.
     cmap : str
         Colormap for both fill and level curves (any matplotlib name).
-    levels : int
-        Number of contour levels.
+    levels : int or array-like
+        If an int (default 12), that many evenly-spaced levels between
+        *vmin*/*vmax*. If array-like, used directly as the explicit level
+        boundaries (in data units, e.g. counts Å⁻³ after normalisation),
+        matching matplotlib's own ``contourf``/``contour`` ``levels``
+        convention -- e.g. ``levels=[10, 25, 50, 75]`` for specific
+        density thresholds rather than an evenly-spaced count.
     vmax : float or None
         Colour-scale ceiling.  Defaults to the histogram maximum after
         normalisation.
@@ -765,6 +1132,18 @@ def plot_sdf(
         ``'density'`` — divide by bin area → counts / Å².
         ``'max'``     — scale peak to 1.
         ``None``      — raw counts.
+    density_reference : float or None
+        Only used when ``normalize='density'``. If given, the local
+        number density (counts/Å³) is further divided by this reference,
+        giving a dimensionless value where 1.0 means "same as bulk" --
+        the same convention g(r) itself uses (g=1 in a featureless
+        region, >1 enhanced, <1 depleted), rather than an absolute
+        counts/Å³ figure you have to separately remember a bulk value to
+        interpret. Pass the ideal-gas/bulk number density of whichever
+        element *target* selects, e.g. ``n_O / mean_volume`` for an O
+        target -- see :func:`chempiler.selectors.resolve` for computing
+        that from your trajectory. ``None`` (default) leaves the density
+        as an absolute counts/Å³ value.
     molecule : dict or None
         Central molecule overlay produced by :func:`molecule_overlay`.
     mol_scale : float
@@ -843,6 +1222,13 @@ def plot_sdf(
     # n_center: explicit argument wins, then meta, then 1 (raw counts).
     if n_center is None:
         n_center = _meta.get('n_center', 1)
+
+    # density_reference: explicit argument wins, then meta (the target
+    # species' own bulk/ideal-gas density, tracked automatically by
+    # spatial_density_map(s) as it iterates frames -- see meta comments
+    # there), then None (absolute counts/Å³, no bulk-relative rescaling).
+    if density_reference is None:
+        density_reference = _meta.get('density_reference')
 
     # Derive projection early — needed for normalization, labels, and figsize.
     # Explicit projection= wins; fall back to the molecule dict, then 'xz'.
@@ -933,6 +1319,8 @@ def plot_sdf(
             dx = float(xedges[1] - xedges[0])
             dy = float(yedges[1] - yedges[0])
             data = data / (nc * dx * dy)
+        if density_reference is not None:
+            data = data / float(density_reference)
     elif normalize == 'max' and data.max() > 0:
         data = data / data.max()
 
@@ -1027,8 +1415,27 @@ def plot_sdf(
     else:
         norm = mcolors.Normalize(vmin=vmin_, vmax=vmax_)
 
-    lvl_vals = np.linspace(vmin_, vmax_, levels + 2)[1:-1]
+    if np.ndim(levels) > 0:
+        lvl_vals = np.asarray(levels, dtype=float)
+    else:
+        lvl_vals = np.linspace(vmin_, vmax_, levels + 2)[1:-1]
     mappable = None
+
+    # lvl_vals sits strictly inside (vmin_, vmax_) -- the endpoints are
+    # dropped so the outermost band isn't a degenerate zero-area contour.
+    # Without `extend`, contourf/contour leave anything past the outermost
+    # *drawn* level completely unfilled (background shows through) rather
+    # than clamped to the colormap's end colour, which silently hides
+    # exactly the peak bins a vmax cap is meant to highlight.
+    #
+    # Only extend on the high side: these maps are mostly bulk-density/
+    # near-zero background below the lowest level (routinely >80% of
+    # bins), and leaving that unfilled -- rather than flooding it with the
+    # colormap's "under" colour via extend='min'/'both' -- is the existing,
+    # deliberate look (only structure above the noise floor gets painted).
+    finite = data[np.isfinite(data)]
+    has_over = finite.size > 0 and np.nanmax(finite) > lvl_vals[-1]
+    extend = 'max' if has_over else 'neither'
 
     if render == 'image':
         imshow_kw = dict(origin='lower',
@@ -1044,22 +1451,22 @@ def plot_sdf(
         )
     elif render == 'contourf':
         mappable = ax.contourf(hc, vc, data, levels=lvl_vals,
-                               cmap=cmap, norm=norm)
+                               cmap=cmap, norm=norm, extend=extend)
     elif render == 'contour':
         mappable = ax.contour(hc, vc, data, levels=lvl_vals,
-                              cmap=cmap, norm=norm, linewidths=1.0)
+                              cmap=cmap, norm=norm, linewidths=1.0, extend=extend)
     elif render == 'fill+contour':
         mappable = ax.pcolormesh(
             h_edges, v_edges, data,
             cmap=cmap, norm=norm, shading='flat', rasterized=True,
         )
         ax.contour(hc, vc, data, levels=lvl_vals,
-                   colors='white', linewidths=0.7, alpha=0.7)
+                   colors='white', linewidths=0.7, alpha=0.7, extend=extend)
     elif render == 'contourf+contour':
         mappable = ax.contourf(hc, vc, data, levels=lvl_vals,
-                               cmap=cmap, norm=norm)
+                               cmap=cmap, norm=norm, extend=extend)
         ax.contour(hc, vc, data, levels=lvl_vals,
-                   colors='white', linewidths=0.7, alpha=0.7)
+                   colors='white', linewidths=0.7, alpha=0.7, extend=extend)
     else:
         raise ValueError(
             f"render must be one of: 'image', 'fill', 'contourf', 'contour', "
@@ -1076,7 +1483,9 @@ def plot_sdf(
         elif colorbar_label is not None:
             cb.set_label(colorbar_label)
         else:
-            if normalize == 'density':
+            if normalize == 'density' and density_reference is not None:
+                cb_label = r'$\rho\,/\,\rho_{\mathrm{bulk}}$'
+            elif normalize == 'density':
                 cb_label = ('counts Å$^{-3}$'
                             if proj in ('cylindrical', 'spherical')
                             else 'counts Å$^{-2}$')
@@ -1150,10 +1559,23 @@ def plot_sdf(
 
     if molecule is not None:
         # Freeze limits so atom/bond artists don't expand the axes range.
+        # Passed into _draw_molecule_overlay (rather than it re-querying
+        # ax.get_xlim()/get_ylim() itself) because the bond-line ax.plot()
+        # calls inside it re-trigger matplotlib's autoscale with the
+        # standard ~5% margin, transiently *widening* the axes -- a
+        # highlight positioned to fit that transient range then ends up
+        # outside the range we restore to right after, and gets clipped
+        # away entirely (this was a real bug: the specular highlight on
+        # an atom sitting near the axes edge, e.g. the centre atom at
+        # r_perp=0 on a cylindrical map, silently vanished with
+        # render='contourf' specifically, because contourf's own default
+        # margin differs from plot()'s and so happened to disagree with
+        # it more often than pcolormesh's did).
         xlim, ylim = ax.get_xlim(), ax.get_ylim()
         # axis inversion (done above) already repositions the molecule in data
         # coordinates — passing flip_bond here would double-flip it
-        _draw_molecule_overlay(ax, molecule, mol_scale, bond_vertical, False)
+        _draw_molecule_overlay(ax, molecule, mol_scale, bond_vertical, False,
+                               xlim=xlim, ylim=ylim)
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
 
@@ -1163,7 +1585,8 @@ def plot_sdf(
 _BOND_AXIS = 2   # bond is always along z after _bond_rotation
 
 
-def _draw_molecule_overlay(ax, molecule, mol_scale, bond_vertical=False, flip_bond=False):
+def _draw_molecule_overlay(ax, molecule, mol_scale, bond_vertical=False, flip_bond=False,
+                           xlim=None, ylim=None):
     """Draw the molecule directly on *ax* in data coordinates.
 
     Atoms are drawn as circles via draw_atom_2d; bonds as grey lines between
@@ -1173,6 +1596,19 @@ def _draw_molecule_overlay(ax, molecule, mol_scale, bond_vertical=False, flip_bo
       - secondary atoms (e.g. the second H of H₂O) appear at the correct
         projected position regardless of projection type
       - flip_bond works by negating the bond-axis coordinate before projection
+
+    Parameters
+    ----------
+    xlim, ylim : tuple of float, optional
+        The axes limits the caller will actually keep (frozen *before*
+        this function runs, since the bond-line ax.plot() calls below
+        re-trigger matplotlib's autoscale and transiently change the
+        limits). Used to decide which side to place each atom's specular
+        highlight on -- reading ax.get_xlim()/get_ylim() *inside* this
+        function instead would see that transient, about-to-be-discarded
+        range rather than the one actually in effect in the final figure,
+        and can place the highlight somewhere that gets clipped away
+        entirely. Falls back to a live query if not given.
     """
     from .colours import draw_atom_2d
 
@@ -1213,11 +1649,18 @@ def _draw_molecule_overlay(ax, molecule, mol_scale, bond_vertical=False, flip_bo
     # r⊥=0/r=0 on cylindrical/spherical maps) would have its default
     # upper-left specular highlight clipped off; flip it to whichever side
     # actually stays inside the visible limits.
-    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+    if xlim is None:
+        xlim = ax.get_xlim()
+    if ylim is None:
+        ylim = ax.get_ylim()
+
+    def _fits(pos, offset, lo, hi):
+        return lo <= pos + offset <= hi
+
     for (x, y), sym in zip(positions_2d, symbols):
         r = _elem_radius(sym) * mol_scale
-        hdx = -0.3 if xlim[0] <= x - 0.3 * r else 0.3
-        hdy = 0.3 if y + 0.3 * r <= ylim[1] else -0.3
+        hdx = -0.3 if _fits(x, -0.3 * r, xlim[0], xlim[1]) else 0.3
+        hdy = 0.3 if _fits(y, 0.3 * r, ylim[0], ylim[1]) else -0.3
         draw_atom_2d(ax, x, y, sym, scale=mol_scale, zorder_base=5,
                      highlight_dir=(hdx, hdy))
 

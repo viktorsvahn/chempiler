@@ -6,6 +6,7 @@ callables used by Tracker and the analysis functions in state_engine.
 """
 
 import numpy as np
+from ase.data import chemical_symbols
 
 
 def atoms(frame, symbol=None):
@@ -91,6 +92,13 @@ def resolve(frame, selector):
         return atoms(frame, symbol=None)   # all atoms
 
     if isinstance(selector, str):
+        if selector not in chemical_symbols:
+            raise ValueError(
+                f"{selector!r} is not an element symbol. Use "
+                f"{{{selector!r}: None}} for the atoms of that molecule. (rdf() "
+                f"also accepts a formula string, as one centre-of-mass point "
+                f"per molecule.)"
+            )
         return atoms(frame, selector)
 
     if isinstance(selector, dict):

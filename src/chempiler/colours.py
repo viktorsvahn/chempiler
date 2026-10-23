@@ -9,7 +9,9 @@ H is mapped to Tol grey rather than white so it is visible on white backgrounds.
 """
 
 import numpy as np
-from ase.data import covalent_radii as _ASE_COV_RADII, atomic_numbers as _ASE_ANUM
+from ase.data import (covalent_radii as _ASE_COV_RADII,
+                       vdw_radii as _ASE_VDW_RADII,
+                       atomic_numbers as _ASE_ANUM)
 
 # ---------------------------------------------------------------------------
 # Tol-ified Jmol colour scheme
@@ -40,18 +42,45 @@ def elem_color(symbol):
     return ELEM_COLOR.get(symbol, _FALLBACK_COLOR)
 
 
-def elem_radius(symbol):
-    """Return the ASE covalent radius (Å) for *symbol*, falling back to 0.7 Å."""
+def elem_radius(symbol, kind='covalent'):
+    """Return an atomic radius (Å) for *symbol*.
+
+    Parameters
+    ----------
+    symbol : str
+    kind : {'covalent', 'vdw'}
+        ``'covalent'`` (default) -- ASE's covalent bonding radius, the
+        same value used for bond detection (:func:`chempiler.perception.get_bonds`)
+        and the default ball-and-stick atom size.
+        ``'vdw'`` -- Bondi-style van der Waals radius, the conventional
+        choice for space-filling / no-bonds-shown renders (atoms sized to
+        their actual non-bonded contact radius rather than their much
+        smaller bonding radius). ASE has no recorded VDW radius for about
+        half of the periodic table; those fall back to 1.5x the covalent
+        radius as a rough approximation.
+    """
     n = _ASE_ANUM.get(symbol)
-    if n is None:
-        return 0.70
-    return float(_ASE_COV_RADII[n])
+    if kind == 'covalent':
+        if n is None:
+            return 0.70
+        return float(_ASE_COV_RADII[n])
+
+    if kind == 'vdw':
+        if n is None:
+            return 1.05
+        r = _ASE_VDW_RADII[n]
+        if np.isnan(r):
+            r = 1.5 * _ASE_COV_RADII[n]
+        return float(r)
+
+    raise ValueError(f"kind must be 'covalent' or 'vdw', got {kind!r}")
 
 
 # ---------------------------------------------------------------------------
 # Atom drawing
 # ---------------------------------------------------------------------------
-def draw_atom_2d(ax, x, y, symbol, scale=1.0, zorder_base=2, highlight_dir=(-0.3, 0.3)):
+def draw_atom_2d(ax, x, y, symbol, scale=1.0, radius='covalent', zorder_base=2,
+                 highlight_dir=(-0.3, 0.3), alpha=1.0):
     """Draw a single atom as a shaded circle on *ax*.
 
     The circle uses the Tol-ified Jmol colour with a dark outline and a small
@@ -66,7 +95,11 @@ def draw_atom_2d(ax, x, y, symbol, scale=1.0, zorder_base=2, highlight_dir=(-0.3
     symbol : str
         Element symbol, e.g. ``'O'``.
     scale : float
-        Multiplier applied to the covalent radius.
+        Multiplier applied to the atomic radius.
+    radius : {'covalent', 'vdw'}
+        Which radius to use -- see :func:`elem_radius`. ``'vdw'`` is the
+        conventional choice when not also drawing bonds (space-filling
+        style).
     zorder_base : int
         z-order for the atom body; the highlight is drawn at ``zorder_base + 1``.
     highlight_dir : tuple of float
@@ -74,24 +107,27 @@ def draw_atom_2d(ax, x, y, symbol, scale=1.0, zorder_base=2, highlight_dir=(-0.3
         radius.  Default ``(-0.3, 0.3)`` is upper-left; callers whose atom
         sits near an axes boundary can flip a component to keep the
         highlight from being clipped off.
+    alpha : float
+        Opacity of the whole atom (body, outline and highlight).
     """
     from matplotlib.patches import Circle
 
-    r = elem_radius(symbol) * scale
+    r = elem_radius(symbol, kind=radius) * scale
     fc = elem_color(symbol)
     hdx, hdy = highlight_dir
 
     ax.add_patch(Circle(
         (x, y), radius=r,
-        color=fc, ec='#111111', lw=0.65, zorder=zorder_base,
+        color=fc, ec='#111111', lw=0.65, zorder=zorder_base, alpha=alpha,
     ))
     ax.add_patch(Circle(
         (x + hdx * r, y + hdy * r), radius=0.18 * r,
-        color='white', alpha=0.6, lw=0, zorder=zorder_base + 1,
+        color='white', alpha=0.6 * alpha, lw=0, zorder=zorder_base + 1,
     ))
 
 
-def draw_molecule_2d(ax, positions_2d, symbols, scale=1.0, zorder_base=2):
+def draw_molecule_2d(ax, positions_2d, symbols, scale=1.0, radius='covalent',
+                     zorder_base=2):
     """Draw a set of atoms from pre-projected 2D positions.
 
     Parameters
@@ -102,11 +138,13 @@ def draw_molecule_2d(ax, positions_2d, symbols, scale=1.0, zorder_base=2):
     symbols : list of str
         Element symbol for each atom.
     scale : float
-        Multiplier applied to all covalent radii.
+        Multiplier applied to all atomic radii.
+    radius : {'covalent', 'vdw'}
+        Which radius to use for every atom -- see :func:`elem_radius`.
     zorder_base : int
         z-order for atom bodies; highlights are at ``zorder_base + 1``.
     """
     positions_2d = np.asarray(positions_2d)
     for (x, y), sym in zip(positions_2d, symbols):
-        draw_atom_2d(ax, float(x), float(y), sym, scale=scale,
+        draw_atom_2d(ax, float(x), float(y), sym, scale=scale, radius=radius,
                      zorder_base=zorder_base)
